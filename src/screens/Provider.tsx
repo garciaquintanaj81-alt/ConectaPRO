@@ -211,8 +211,15 @@ export function OpportunityDetail({ id }: { id: string }) {
           <div className="mt-4 flex items-center gap-3 text-lg"><PIcon className={cx("h-6 w-6", PAYMENT_COLOR[r.payment])} /> Pago en <b>{PAYMENTS[r.payment]}</b></div>
         </div>
         <div className="card self-start p-6">
-          {taken ? (
-            <p className="font-semibold text-ink-soft">Esta solicitud ya fue asignada.</p>
+          {taken && r.providerId === myProvider.id ? (
+            <>
+              <Badge tone="ok" icon={LuCircleCheck} className="text-base">¡El cliente te eligió!</Badge>
+              <p className="mt-3 text-ink-soft">Se generó el acuerdo digital{r.agreement ? ` para ${agreementWhen(r.agreement.date, r.agreement.time)} por ${money(r.agreement.price)}` : ""}.</p>
+              <Button className="mt-5 w-full" icon={LuBriefcase} onClick={() => navigate("/trabajo/" + r.id)}>Ver trabajo</Button>
+              <Button variant="soft" className="mt-3 w-full" icon={LuMessageCircle} onClick={() => navigate("/chat/" + openConversation(r.clientKey, c.name, "Cliente", c.photo))}>Escribir al cliente</Button>
+            </>
+          ) : taken ? (
+            <p className="font-semibold text-ink-soft">Esta solicitud ya fue asignada a otro proveedor.</p>
           ) : applied ? (
             <>
               <Badge tone="ok" icon={LuCircleCheck} className="text-base">Te postulaste</Badge>

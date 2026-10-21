@@ -36,9 +36,9 @@ export function ClientHome() {
   const active = myRequests.filter((r) => r.status === "en_curso" || r.status === "buscando");
   const featured = useMemo(() => [...db.customProviders, ...["p1", "p4", "p5", "p2"].map((id) => getProvider(id)!)].filter(Boolean).slice(0, 4), [db.customProviders]);
   const banners = [
-    { t: "Conecta con profesionales verificados en tu zona", img: "img/banner_chica.jpg" },
-    { t: "Califica tus servicios y gana puntos con marcas aliadas", img: "img/banner_chica.jpg" },
-    { t: "¿Sin efectivo? Prueba el match por trueque", img: "img/banner_chica.jpg", to: "/trueque" },
+    { t: "Conecta con profesionales verificados en tu zona", img: "img/banner_manos.jpg" },
+    { t: "Califica tus servicios y gana puntos con marcas aliadas", img: "img/girl.jpg" },
+    { t: "¿Sin efectivo? Prueba el match por trueque", img: "img/worker.jpg", to: "/trueque" },
   ];
 
   return (
@@ -94,7 +94,7 @@ export function ClientHome() {
                   {banners.map((_, i) => <button key={i} aria-label={`Banner ${i + 1}`} onClick={() => setSlide(i)} className={cx("h-2.5 w-2.5 rounded-full", i === slide ? "bg-white" : "bg-white/40")} />)}
                 </div>
               </div>
-              <img src={banners[slide].img} alt="" className="absolute bottom-0 right-0 h-full w-[45%] object-cover object-left sm:w-[38%]" style={{ maskImage: "linear-gradient(90deg, transparent, #000 30%)", WebkitMaskImage: "linear-gradient(90deg, transparent, #000 30%)" }} />
+              <img key={banners[slide].img} src={banners[slide].img} alt="" className="animate-page absolute bottom-0 right-0 h-full w-[48%] object-cover object-center sm:w-[40%]" style={{ maskImage: "linear-gradient(90deg, transparent, #000 30%)", WebkitMaskImage: "linear-gradient(90deg, transparent, #000 30%)" }} />
             </div>
           </div>
 

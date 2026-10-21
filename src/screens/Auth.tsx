@@ -8,6 +8,7 @@ import { useStore } from "../store";
 import { navigate, Link, goBack } from "../router";
 import { Button, Field, Logo, Stepper, cx, inputCls, Avatar } from "../ui";
 import { CITIES, DEMO_ACCOUNTS } from "../data";
+import { SimulatorLink } from "./Simulator";
 
 // ---------------------------------------------------------------------
 //  Marco de las pantallas de acceso: en computador se divide en dos
@@ -92,10 +93,7 @@ export function Welcome() {
         </div>
 
         <div className="mt-auto w-full space-y-4 pt-10 lg:mt-0 lg:max-w-md lg:pt-0">
-          <div className="hidden grid-cols-2 gap-4 lg:grid">
-            <img src="img/girl.jpg" alt="" className="aspect-square w-full rounded-3xl object-cover shadow-sm" />
-            <img src="img/worker.jpg" alt="" className="aspect-square w-full rounded-3xl object-cover shadow-sm" />
-          </div>
+          <img src="img/ilustracion_app.jpg" alt="Cliente y proveedor conectados por ConectaPRO" className="hidden max-h-[420px] w-full rounded-3xl object-cover object-top shadow-sm lg:block" />
           <button onClick={() => navigate("/registro?rol=cliente")} className="flex w-full items-center gap-4 rounded-2xl bg-brand-gradient px-5 py-5 text-left text-lg font-bold text-white shadow-brand transition hover:brightness-110 active:scale-[.99]">
             <LuSearch className="h-8 w-8 rounded-full border-2 border-white p-1" />
             <span className="border-l border-white/40 pl-4">Quiero solicitar un servicio</span>
@@ -109,6 +107,7 @@ export function Welcome() {
           <p className="pt-3 text-center text-lg text-ink-soft">
             ¿Ya tienes cuenta? <Link to="/login" className="font-bold text-brand-violet">Iniciar sesión</Link>
           </p>
+          <SimulatorLink className="mt-2" />
         </div>
       </div>
     </div>
@@ -168,7 +167,7 @@ export function Login() {
 
       <div className="mt-7 rounded-2xl bg-brand-50/70 p-4">
         <div className="text-sm font-bold text-brand">Cuentas de demostración</div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid grid-cols-2 gap-2">
           {DEMO_ACCOUNTS.map((a) => (
             <button key={a.id} onClick={() => { login(a.id); navigate("/inicio", true); }} className="flex items-center gap-3 rounded-xl bg-white p-2.5 text-left ring-1 ring-line hover:ring-brand/40">
               <Avatar name={a.name} photo={a.photo} size={40} />
@@ -181,6 +180,7 @@ export function Login() {
         </div>
       </div>
 
+      <SimulatorLink className="mt-4" />
       <p className="mt-7 text-center text-lg text-ink-soft">¿No tienes una cuenta?<br /><Link to="/registro" className="font-bold text-brand-violet">Registrarme</Link></p>
     </AuthFrame>
   );

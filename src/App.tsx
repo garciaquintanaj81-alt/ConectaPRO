@@ -10,15 +10,18 @@ import {
 import { JobDetail, MyJobs, MyService, Opportunities, OpportunityDetail, ProviderHome, RateClient } from "./screens/Provider";
 import { Barter, Messages, Notifications, Profile, ProfileSection } from "./screens/Common";
 import { AppShell } from "./Layout";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Simulator } from "./screens/Simulator";
+import type { Notification } from "./store";
+import { LuBell } from "react-icons/lu";
 
 type Route = [string, (p: Record<string, string>) => JSX.Element];
 
 export default function App() {
   const path = useRoute();
-  const { db, mode, strikes, toastMsg, reset } = useStore();
-  const logged = !!db.session;
-  const isPublic = path === "/" || path === "/login" || path === "/registro";
+  const { session, mode, strikes, toastMsg, reset } = useStore();
+  const logged = !!session;
+  const isPublic = path === "/" || path === "/login" || path === "/registro" || path === "/simulador";
 
   // Redirecciones de sesión
   useEffect(() => {
@@ -28,6 +31,7 @@ export default function App() {
 
   const routes: Route[] = [
     ["/", () => <Welcome />],
+    ["/simulador", () => <Simulator />],
     ["/login", () => <Login />],
     ["/registro", () => <Register />],
     ["/rol", () => <RoleSelect />],
@@ -80,11 +84,45 @@ export default function App() {
   return (
     <>
       <div key={path} className="animate-page">{page}</div>
+      <PushBanner path={path} />
       {toastMsg && (
         <div className="animate-toast fixed left-1/2 top-4 z-[60] w-[min(92vw,460px)] rounded-2xl bg-ink px-5 py-3.5 text-center text-[15px] font-semibold text-white shadow-2xl" role="status">
           {toastMsg}
         </div>
       )}
     </>
+  );
+}
+
+/** Notificación emergente (estilo celular) cuando llega algo nuevo en tiempo real */
+function PushBanner({ path }: { path: string }) {
+  const { notifications, account } = useStore();
+  const seen = useRef<Set<string> | null>(null);
+  const [show, setShow] = useState<Notification | null>(null);
+  useEffect(() => { seen.current = null; }, [account?.id]);
+  useEffect(() => {
+    if (!account) return;
+    if (!seen.current) { seen.current = new Set(notifications.map((n) => n.id)); return; }
+    const fresh = notifications.filter((n) => !seen.current!.has(n.id));
+    fresh.forEach((n) => seen.current!.add(n.id));
+    const n = fresh.find((x) => !x.read && !(x.link && x.link === path));
+    if (!n) return;
+    setShow(n);
+    try { navigator.vibrate?.(80); } catch { /* */ }
+    const t = setTimeout(() => setShow((c) => (c?.id === n.id ? null : c)), 5000);
+    return () => clearTimeout(t);
+  }, [notifications]);
+  if (!show) return null;
+  return (
+    <button
+      onClick={() => { setShow(null); if (show.link) navigate(show.link); }}
+      className="animate-toast fixed left-1/2 top-3 z-[70] flex w-[min(94vw,420px)] items-start gap-3 rounded-3xl bg-white/95 p-3.5 text-left shadow-[0_18px_50px_-12px_rgba(20,30,90,.45)] ring-1 ring-line backdrop-blur"
+    >
+      <img src="img/logo.png" alt="" className="h-10 w-10 shrink-0 rounded-xl bg-brand-50 p-1" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between text-xs font-semibold text-ink-soft"><span className="flex items-center gap-1"><LuBell className="h-3.5 w-3.5" /> ConectaPRO</span><span>ahora</span></div>
+        <div className="mt-0.5 text-[14px] font-semibold leading-snug text-ink">{show.text}</div>
+      </div>
+    </button>
   );
 }

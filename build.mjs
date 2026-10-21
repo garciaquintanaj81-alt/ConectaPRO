@@ -47,7 +47,10 @@ async function buildCss() {
   // Candidatos: todas las "palabras" de los archivos fuente que podrían ser clases
   const candidates = new Set();
   for (const f of walk(path.join(ROOT, "src")).filter((f) => /\.(tsx?|css)$/.test(f))) {
-    for (const m of fs.readFileSync(f, "utf8").matchAll(/[^\s"'`{}()<>;,]+/g)) candidates.add(m[0]);
+    const src = fs.readFileSync(f, "utf8");
+    // Dos pasadas: una conserva valores arbitrarios con comas/paréntesis (p. ej. shadow-[0_4px_rgba(0,0,0,.2)])
+    for (const m of src.matchAll(/[^\s"'`{}<>;]+/g)) candidates.add(m[0]);
+    for (const m of src.matchAll(/[^\s"'`{}()<>;,]+/g)) candidates.add(m[0]);
   }
   fs.writeFileSync(path.join(OUT, "assets/app.css"), compiler.build([...candidates]));
 }

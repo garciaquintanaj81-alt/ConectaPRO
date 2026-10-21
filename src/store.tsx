@@ -3,7 +3,7 @@
 //  Todo se guarda en localStorage para que el prototipo "recuerde"
 //  lo que se hace. "Restablecer demo" vuelve al estado inicial.
 // =====================================================================
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Account, BASE, CLIENTS, DEMO_ACCOUNTS, PaymentMethod, PROVIDERS, Provider, ServiceId,
   at, daysAgo, minutesAgo, serviceById,
@@ -38,6 +38,7 @@ export interface Request {
   clientRating?: Rating;    // calificación del proveedor al cliente
   finishedAt?: number;
   photo?: string;
+  live?: boolean;
   punctualityPenalty?: boolean;
 }
 
@@ -59,7 +60,11 @@ export interface DB {
 }
 
 const KEY = "conectapro-demo-v1";
-const VERSION = 1;
+const VERSION = 2;
+
+/** Modo simulación: cada pantalla del simulador abre la app con ?as=<cuenta> */
+export const FRAME_AS = new URLSearchParams(window.location.search).get("as");
+export const LIVE = !!FRAME_AS;
 export const uid = (p = "id") => p + Math.random().toString(36).slice(2, 9);
 const todayAt = (h: number, m: number) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime(); };
 export const mergeProviders = (custom: Provider[]) => [...PROVIDERS.filter((p) => !custom.some((c) => c.id === p.id)), ...custom];
@@ -122,7 +127,7 @@ function seed(): DB {
     { id: "o1", clientKey: "c1", title: "Fuga de agua en la cocina", desc: "Necesito reparar una fuga de agua en la cocina.", service: "plomeria",
       location: loc(1.6, 1.8), payment: "efectivo", wantsProposals: true, createdAt: minutesAgo(5), status: "buscando",
       matched: [], applicants: [], declinedBy: [] },
-    { id: "o2", clientKey: "c2", title: "Instalación de lámparas", desc: "Instalación de lámparas en apartamento.", service: "electricidad",
+    { id: "o2", ownerAccountId: "u3", clientKey: "c2", title: "Instalación de lámparas", desc: "Instalación de lámparas en apartamento.", service: "electricidad",
       location: loc(-0.5, 3.0), payment: "transferencia", wantsProposals: true, createdAt: minutesAgo(18), status: "buscando",
       matched: [], applicants: [], declinedBy: [] },
     { id: "o3", clientKey: "c3", title: "Pintar habitación", desc: "Pintar habitación de 12 m².", service: "pintura",
@@ -177,6 +182,12 @@ function seed(): DB {
         { id: "m2", from: "me", text: "Sí señora, allá estaré puntual.", at: t(8, 10) },
       ] },
     ],
+    u3: [],
+    u4: [
+      { id: "ch-c6", peerKey: "c6", peerName: "Daniela Jaramillo", peerPhoto: "img/daniela.jpg", peerRole: "Cliente", unread: 0, messages: [
+        { id: "m1", from: "me", text: "¡Gracias por la calificación, Daniela! Quedo atento para lo que necesites.", at: new Date(2026, 9, 12, 18).getTime() },
+      ] },
+    ],
   };
 
   const notifications: Record<string, Notification[]> = {
@@ -189,6 +200,12 @@ function seed(): DB {
       { id: "n1", kind: "match", text: "Nueva oportunidad de plomería a 1.2 km: \"Fuga de agua en la cocina\"", at: minutesAgo(5), read: false, link: "/oportunidad/o1" },
       { id: "n2", kind: "agreement", text: "Daniela Jaramillo confirmó el acuerdo digital CP-2026-0481", at: t(11, 40), read: false, link: "/trabajo/r1" },
     ],
+    u3: [
+      { id: "n1", kind: "match", text: "Notificamos a 2 proveedores compatibles para \"Instalación de lámparas\"", at: minutesAgo(18), read: true, link: "/proveedores/o2" },
+    ],
+    u4: [
+      { id: "n1", kind: "match", text: "Nueva oportunidad de electricidad a 2.5 km: \"Instalación de lámparas\"", at: minutesAgo(18), read: false, link: "/oportunidad/o2" },
+    ],
   };
 
   return {
@@ -199,8 +216,8 @@ function seed(): DB {
     requests,
     chats,
     notifications,
-    strikes: { u1: 0, u2: 0 },
-    points: { u1: 320, u2: 540 },
+    strikes: { u1: 0, u2: 0, u3: 0, u4: 0 },
+    points: { u1: 320, u2: 540, u3: 180, u4: 410 },
     prefs: {},
   };
 }
@@ -226,10 +243,31 @@ function useStoreValue() {
   const [db, setDb] = useState<DB>(load);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [, setTick] = useState(0);
+  // En el simulador cada pantalla tiene su propia sesión (no se comparte)
+  const frameSession = useRef<DB["session"]>(
+    FRAME_AS ? { accountId: FRAME_AS, mode: DEMO_ACCOUNTS.find((a) => a.id === FRAME_AS)?.providerId ? "proveedor" : "cliente" } : null
+  );
+  const session = FRAME_AS ? frameSession.current : db.session;
 
   useEffect(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* ignorar */ }
+    try {
+      const s = JSON.stringify(db);
+      if (localStorage.getItem(KEY) !== s) localStorage.setItem(KEY, s);
+    } catch { /* ignorar */ }
   }, [db]);
+
+  // Sincronización en tiempo real entre pantallas / pestañas abiertas
+  useEffect(() => {
+    const on = (e: StorageEvent) => {
+      if (e.key !== KEY) return;
+      try {
+        const next = e.newValue ? (JSON.parse(e.newValue) as DB) : seed();
+        if (next.version === VERSION) setDb(next);
+      } catch { /* ignorar */ }
+    };
+    window.addEventListener("storage", on);
+    return () => window.removeEventListener("storage", on);
+  }, []);
 
   // Reloj: refresca la UI cada 1 s (postulaciones simuladas que van llegando)
   useEffect(() => {
@@ -245,13 +283,19 @@ function useStoreValue() {
   const update = useCallback((fn: (d: DB) => void) => {
     setDb((prev) => {
       const next = structuredClone(prev);
-      fn(next);
+      if (FRAME_AS) {
+        const real = next.session;
+        next.session = frameSession.current ? { ...frameSession.current } : null;
+        fn(next);
+        frameSession.current = next.session;
+        next.session = real;
+      } else fn(next);
       return next;
     });
   }, []);
 
-  const account = db.session ? db.accounts.find((a) => a.id === db.session!.accountId) ?? null : null;
-  const mode: Mode = db.session?.mode ?? "cliente";
+  const account = session ? db.accounts.find((a) => a.id === session.accountId) ?? null : null;
+  const mode: Mode = session?.mode ?? "cliente";
   const allProviders = useMemo(() => mergeProviders(db.customProviders), [db.customProviders]);
   const getProvider = (id?: string) => (id ? allProviders.find((p) => p.id === id) : undefined);
   const myProvider = account?.providerId ? getProvider(account.providerId) : undefined;
@@ -268,6 +312,13 @@ function useStoreValue() {
   const notify = (d: DB, accountId: string | undefined, n: Omit<Notification, "id" | "at" | "read">) => {
     if (!accountId) return;
     (d.notifications[accountId] ??= []).unshift({ ...n, id: uid("n"), at: Date.now(), read: false });
+  };
+  /** Busca (o crea) la conversación de otra cuenta con la persona indicada */
+  const peerConv = (d: DB, accountId: string, peerKey: string, peerName: string, peerRole: string, peerPhoto?: string) => {
+    const list = (d.chats[accountId] ??= []);
+    let c = list.find((x) => x.peerKey === peerKey);
+    if (!c) { c = { id: "ch-" + peerKey, peerKey, peerName, peerPhoto, peerRole, unread: 0, messages: [] }; list.unshift(c); }
+    return c;
   };
   const accountOfProvider = (d: DB, providerId: string) => d.accounts.find((a) => a.providerId === providerId)?.id;
 
@@ -297,8 +348,10 @@ function useStoreValue() {
       update((d) => { const a = d.accounts.find((x) => x.id === d.session?.accountId); if (a) Object.assign(a, patch); });
     },
     reset() {
-      try { localStorage.removeItem(KEY); } catch { /* */ }
-      setDb(seed());
+      const fresh = seed();
+      if (FRAME_AS) fresh.session = null;
+      try { localStorage.setItem(KEY, JSON.stringify(fresh)); } catch { /* */ }
+      setDb(fresh);
     },
 
     // ---------- Proveedor: parametrización del oferente ----------
@@ -334,19 +387,21 @@ function useStoreValue() {
         const { matches } = matchProviders(input.service, input.location, { pool, includeLater: true });
         const now = Date.now();
         // Simulación: los proveedores notificados responden en unos segundos
+        // En el simulador en vivo, los proveedores con cuenta responden ellos mismos
         const applicants: Applicant[] = matches
           .filter((m) => m.provider.id !== acc.providerId)
-          .slice(0, 4)
+          .filter((m) => !(LIVE && accountOfProvider(d, m.provider.id)))
+          .slice(0, LIVE ? 2 : 4)
           .map((m, i) => ({
             providerId: m.provider.id,
             price: Math.round((m.provider.priceMin + m.provider.priceMax) / 2 / 5000) * 5000,
-            at: now + 2500 + i * 1600 + Math.round(Math.random() * 600),
+            at: now + (LIVE ? 20000 + i * 8000 : 2500 + i * 1600) + Math.round(Math.random() * 600),
           }));
         const title = input.desc.split(/[.,\n]/)[0].slice(0, 48) || serviceById(input.service).name;
         d.requests.unshift({
           id, ownerAccountId: acc.id, clientKey: acc.clientId, title, ...input,
           createdAt: now, status: "buscando", matched: matches.map((m) => m.provider.id), applicants, declinedBy: [],
-          photo: serviceById(input.service).photo,
+          photo: serviceById(input.service).photo, live: LIVE,
         });
         for (const m of matches) {
           const pa = accountOfProvider(d, m.provider.id);
@@ -375,8 +430,17 @@ function useStoreValue() {
           list.unshift(conv);
         }
         conv.messages.push({ id: uid("m"), from: "system", text: `Acuerdo ${r.agreement.code} confirmado · ${r.title}`, at: Date.now() });
-        conv.messages.push({ id: uid("m"), from: "peer", text: "¡Hola! Ya recibí el acuerdo. Allá estaré a la hora pactada 👍", at: Date.now() + 1500 });
-        conv.unread += 1;
+        const provAcc = accountOfProvider(d, providerId);
+        if (provAcc && provAcc !== accId) {
+          const me = d.accounts.find((a) => a.id === accId)!;
+          const pc = peerConv(d, provAcc, me.clientId, me.name, "Cliente", me.photo);
+          pc.messages.push({ id: uid("m"), from: "system", text: `Acuerdo ${r.agreement.code} confirmado · ${r.title}`, at: Date.now() });
+          pc.unread += 1;
+        }
+        if (!(LIVE && provAcc)) {
+          conv.messages.push({ id: uid("m"), from: "peer", text: "¡Hola! Ya recibí el acuerdo. Allá estaré a la hora pactada 👍", at: Date.now() + 1500 });
+          conv.unread += 1;
+        }
       });
     },
 
@@ -460,11 +524,28 @@ function useStoreValue() {
 
     // ---------- Mensajería ----------
     sendMessage(convId: string, msg: { text?: string; image?: string }) {
-      const accId = db.session!.accountId;
+      const accId = session!.accountId;
+      let peerIsLive = false;
       update((d) => {
         const c = d.chats[accId]?.find((x) => x.id === convId);
-        if (c) c.messages.push({ id: uid("m"), from: "me", ...msg, at: Date.now() });
+        if (!c) return;
+        const at = Date.now();
+        c.messages.push({ id: uid("m"), from: "me", ...msg, at });
+        // Entrega el mensaje a la otra persona si tiene cuenta (cliente o proveedor)
+        const me = d.accounts.find((a) => a.id === accId)!;
+        const peerAcc = d.accounts.find((a) => a.providerId === c.peerKey || a.clientId === c.peerKey);
+        if (peerAcc && peerAcc.id !== accId) {
+          const meKey = peerAcc.providerId === c.peerKey ? me.clientId : me.providerId ?? me.clientId;
+          const meRole = peerAcc.providerId === c.peerKey ? "Cliente" : mergeProviders(d.customProviders).find((p) => p.id === me.providerId)?.profession ?? "Proveedor";
+          const pc = peerConv(d, peerAcc.id, meKey, me.name, meRole, me.photo);
+          pc.messages.push({ id: uid("m"), from: "peer", ...msg, at });
+          pc.unread += 1;
+          notify(d, peerAcc.id, { kind: "message", text: `${me.name.split(" ")[0]}: ${msg.text ?? "📷 Foto"}`, link: "/chat/" + pc.id });
+          if (LIVE) peerIsLive = true;
+        }
       });
+      if (LIVE && peerIsLive) return;
+      if (LIVE && db.accounts.some((a) => { const c = db.chats[accId]?.find((x) => x.id === convId); return c && (a.providerId === c.peerKey || a.clientId === c.peerKey); })) return;
       // Respuesta automática simulada
       const replies = [
         "¡Perfecto! Quedo atento.",
@@ -482,7 +563,7 @@ function useStoreValue() {
       }, 1800);
     },
     openConversation(peerKey: string, peerName: string, peerRole: string, peerPhoto?: string) {
-      const accId = db.session!.accountId;
+      const accId = session!.accountId;
       const id = "ch-" + peerKey;
       update((d) => {
         const list = (d.chats[accId] ??= []);
@@ -522,7 +603,7 @@ function useStoreValue() {
   const myJobs = myProvider ? db.requests.filter((r) => r.providerId === myProvider.id) : [];
 
   return {
-    db, account, mode, allProviders, getProvider, myProvider, clientInfo, visibleApplicants,
+    db, session, account, mode, allProviders, getProvider, myProvider, clientInfo, visibleApplicants,
     myRequests, chats, notifications, strikes, points, opportunities, myJobs,
     toast, toastMsg, ...actions,
   };

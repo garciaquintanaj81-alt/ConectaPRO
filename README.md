@@ -9,12 +9,18 @@ Autoras: Julieth A. García Quintana y Daniela S. Junco Salazar · Director: Mig
 
 > Prototipo con **datos simulados**: todo lo que hagas se guarda en tu navegador. Para volver al estado inicial usa *Mi perfil → Seguridad y privacidad → Restablecer demo*.
 
+## 🎬 Simulación en vivo (2 clientes + 2 proveedores)
+
+Abre **https://garciaquintanaj81-alt.github.io/ConectaPRO/#/simulador** en un computador: verás 4 celulares al mismo tiempo
+(Daniela y Juan como clientes, Carlos y Andrés como proveedores). Lo que hace uno le llega a los demás como **notificación en tiempo real**:
+Daniela publica → Carlos y Andrés reciben la alerta y se postulan → Daniela elige y firma el acuerdo → chatean → se califican.
+
 ## Cómo probarlo
 
 1. Abre el enlace en el celular o en el computador (el diseño se adapta a ambos).
 2. En **Iniciar sesión** usa una cuenta de demostración:
-   - **Daniela** → rol *cliente*
-   - **Carlos** → rol *proveedor*
+   - **Daniela** y **Juan** → rol *cliente*
+   - **Carlos** y **Andrés** → rol *proveedor*
 3. O crea una cuenta nueva desde *Registrarme* (incluye validación facial simulada con la cámara).
 
 ### Recorrido sugerido (cliente)

@@ -257,6 +257,10 @@ export const DEMO_ACCOUNTS: Account[] = [
     city: "Rionegro, Antioquia", photo: "img/daniela.jpg", clientId: "c6" },
   { id: "u2", name: "Carlos Ramírez", email: "carlos@conectapro.co", phone: "300 123 4567", document: "1.036.222.111",
     city: "Rionegro, Antioquia", photo: "img/carlos.jpg", clientId: "c7", providerId: "p1" },
+  { id: "u3", name: "Juan Pérez", email: "juan@conectapro.co", phone: "301 222 3344", document: "1.036.777.888",
+    city: "Rionegro, Antioquia", photo: "img/cliente2.jpg", clientId: "c2" },
+  { id: "u4", name: "Andrés Torres", email: "andres@conectapro.co", phone: "301 555 0101", document: "1.036.333.999",
+    city: "Rionegro, Antioquia", photo: "img/andres.jpg", clientId: "c8", providerId: "p2" },
 ];
 
 // ---------------------------------------------------------------------
