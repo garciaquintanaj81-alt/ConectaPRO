@@ -65,13 +65,13 @@ export function ClientHome() {
             <Link to="/explorar" className="flex w-16 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-line" aria-label="Filtros"><LuSlidersHorizontal className="h-6 w-6" /></Link>
           </form>
 
-          <div className="mt-7 grid grid-cols-4 gap-x-3 gap-y-5 md:grid-cols-8">
+          <div className="mt-7 grid grid-cols-4 gap-x-2.5 gap-y-5 sm:gap-x-4">
             {CATEGORIES.map((c) => {
               const Icon = CATEGORY_ICON[c.id];
               return (
                 <Link key={c.id} to={"/explorar?cat=" + c.id} className="group flex flex-col items-center gap-2 text-center">
                   <span className={cx("flex aspect-[1.4] w-full items-center justify-center rounded-2xl transition group-hover:scale-105", c.tint)}><Icon className="h-10 w-10" strokeWidth={2.2} /></span>
-                  <span className="text-[15px] font-medium">{c.name}</span>
+                  <span className="whitespace-nowrap text-[12.5px] font-medium leading-tight tracking-tight min-[400px]:text-[13.5px] sm:text-[15px] sm:tracking-normal">{c.name}</span>
                 </Link>
               );
             })}
