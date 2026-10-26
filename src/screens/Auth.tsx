@@ -7,7 +7,8 @@ import {
 import { useStore } from "../store";
 import { navigate, Link, goBack } from "../router";
 import { Button, Field, Logo, Stepper, cx, inputCls, Avatar } from "../ui";
-import { CITIES, DEMO_ACCOUNTS } from "../data";
+import { rpc } from "../api";
+import { UbicacionSelect } from "../geo";
 import { SimulatorLink } from "./Simulator";
 
 // ---------------------------------------------------------------------
@@ -118,19 +119,26 @@ export function Welcome() {
 //  Iniciar sesión (con accesos rápidos de demostración)
 // ---------------------------------------------------------------------
 export function Login() {
-  const { login, toast, db } = useStore();
+  const { login, loginDemo, toast } = useStore();
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [show, setShow] = useState(false);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [demos, setDemos] = useState<{ email: string; name: string; photo?: string; role: string }[]>([]);
+  useEffect(() => { rpc("api_demo_cuentas").then(setDemos).catch(() => setDemos([])); }, []);
 
+  const go = async (fn: () => Promise<void>) => {
+    setBusy(true); setErr("");
+    try { await fn(); navigate("/inicio", true); }
+    catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  };
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const acc = db.accounts.find((a) => a.email.toLowerCase() === user.trim().toLowerCase() || a.phone.replace(/\s/g, "") === user.replace(/\s/g, ""));
-    if (!acc) return setErr("No encontramos esa cuenta. Usa una cuenta de demostración o regístrate.");
-    if (pass.length < 4) return setErr("La contraseña debe tener al menos 4 caracteres.");
-    login(acc.id);
-    navigate("/inicio", true);
+    if (!/^\S+@\S+\.\S+$/.test(user.trim())) return setErr("Escribe el correo electrónico con el que te registraste");
+    if (pass.length < 6) return setErr("La contraseña debe tener al menos 6 caracteres");
+    go(() => login(user, pass));
   };
 
   return (
@@ -140,7 +148,7 @@ export function Login() {
       <p className="mt-1 text-center text-xl text-ink-soft">Ingresa para continuar</p>
       <form onSubmit={submit} className="mt-8 space-y-4">
         <Field icon={LuUserRound}>
-          <input className={cx(inputCls, "py-2.5")} placeholder="Correo electrónico o celular" value={user} onChange={(e) => { setUser(e.target.value); setErr(""); }} autoComplete="username" />
+          <input type="email" className={cx(inputCls, "py-2.5")} placeholder="Correo electrónico" value={user} onChange={(e) => { setUser(e.target.value); setErr(""); }} autoComplete="username" />
         </Field>
         <Field icon={LuLock} trailing={
           <button type="button" onClick={() => setShow(!show)} aria-label="Mostrar contraseña" className="text-ink">{show ? <LuEyeOff className="h-6 w-6" /> : <LuEye className="h-6 w-6" />}</button>
@@ -148,37 +156,39 @@ export function Login() {
           <input type={show ? "text" : "password"} className={cx(inputCls, "py-2.5")} placeholder="Contraseña" value={pass} onChange={(e) => { setPass(e.target.value); setErr(""); }} autoComplete="current-password" />
         </Field>
         <div className="text-right">
-          <button type="button" onClick={() => toast("Te enviamos un enlace de recuperación (simulado)")} className="font-semibold text-brand-violet">¿Olvidaste tu contraseña?</button>
+          <button type="button" onClick={() => toast("Escribe a soporte@conectapro.co para recuperar tu contraseña")} className="font-semibold text-brand-violet">¿Olvidaste tu contraseña?</button>
         </div>
         {err && <p className="rounded-xl bg-bad-50 px-4 py-3 text-sm font-medium text-bad">{err}</p>}
-        <Button type="submit" className="w-full py-4 text-lg">Iniciar sesión</Button>
+        <Button type="submit" disabled={busy} className="w-full py-4 text-lg">{busy ? "Ingresando…" : "Iniciar sesión"}</Button>
       </form>
 
       <div className="my-7 flex items-center gap-4 text-ink-soft"><span className="h-px flex-1 bg-line" />o continúa con<span className="h-px flex-1 bg-line" /></div>
       <div className="grid grid-cols-3 gap-3">
         {[
           ["Google", <svg key="g" viewBox="0 0 48 48" className="h-8 w-8"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>],
-          ["Apple", <svg key="a" viewBox="0 0 24 24" className="h-8 w-8 fill-ink"><path d="M16.4 12.6c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.3-.8-1.7 0-3.3 1-4.2 2.5-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8s2 .8 3.3.8c1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-2.7-1-2.8-4.2zM14 5.2c.7-.8 1.2-2 1-3.2-1 0-2.2.7-3 1.5-.6.7-1.2 1.9-1 3.1 1.1.1 2.3-.6 3-1.4z"/></svg>],
+          ["Apple", <svg key="a" viewBox="0 0 24 24" className="h-8 w-8 fill-ink"><path d="M16.4 12.6c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.300-.8-1.7 0-3.3 1-4.2 2.5-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8s2 .8 3.3.8c1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-2.7-1-2.8-4.2zM14 5.2c.7-.8 1.2-2 1-3.2-1 0-2.2.7-3 1.5-.6.7-1.2 1.9-1 3.1 1.1.1 2.3-.6 3-1.4z"/></svg>],
           ["Facebook", <svg key="f" viewBox="0 0 24 24" className="h-8 w-8"><circle cx="12" cy="12" r="12" fill="#1877F2"/><path fill="#fff" d="M15.1 12.8h-2.2V20h-3v-7.2H8.4v-2.6h1.5V8.6c0-2 .9-3.2 3.3-3.2h2v2.6h-1.3c-.9 0-1 .4-1 1.1v1.1h2.4l-.2 2.6z"/></svg>],
         ].map(([name, icon]: any) => (
-          <button key={name} type="button" aria-label={name} onClick={() => toast(`Inicio con ${name} disponible en la versión final`)} className="flex h-16 items-center justify-center rounded-2xl bg-white ring-1 ring-line hover:ring-brand/40">{icon}</button>
+          <button key={name} type="button" aria-label={name} onClick={() => toast(`El inicio con ${name} se habilita configurando ese proveedor en Supabase`)} className="flex h-16 items-center justify-center rounded-2xl bg-white ring-1 ring-line hover:ring-brand/40">{icon}</button>
         ))}
       </div>
 
-      <div className="mt-7 rounded-2xl bg-brand-50/70 p-4">
-        <div className="text-sm font-bold text-brand">Cuentas de demostración</div>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {DEMO_ACCOUNTS.map((a) => (
-            <button key={a.id} onClick={() => { login(a.id); navigate("/inicio", true); }} className="flex items-center gap-3 rounded-xl bg-white p-2.5 text-left ring-1 ring-line hover:ring-brand/40">
-              <Avatar name={a.name} photo={a.photo} size={40} />
-              <div className="leading-tight">
-                <div className="text-sm font-bold">{a.name.split(" ")[0]}</div>
-                <div className="text-xs text-ink-soft">{a.providerId ? "Proveedor" : "Cliente"}</div>
-              </div>
-            </button>
-          ))}
+      {demos.length > 0 && (
+        <div className="mt-7 rounded-2xl bg-brand-50/70 p-4">
+          <div className="text-sm font-bold text-brand">Cuentas de demostración</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {demos.map((a) => (
+              <button key={a.email} disabled={busy} onClick={() => go(() => loginDemo(a.email))} className="flex items-center gap-3 rounded-xl bg-white p-2.5 text-left ring-1 ring-line hover:ring-brand/40 disabled:opacity-60">
+                <Avatar name={a.name} photo={a.photo} size={40} />
+                <div className="leading-tight">
+                  <div className="text-sm font-bold">{a.name.split(" ")[0]}</div>
+                  <div className="text-xs text-ink-soft">{a.role}</div>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <SimulatorLink className="mt-4" />
       <p className="mt-7 text-center text-lg text-ink-soft">¿No tienes una cuenta?<br /><Link to="/registro" className="font-bold text-brand-violet">Registrarme</Link></p>
@@ -190,35 +200,43 @@ export function Login() {
 //  Registro: 1) datos  2) validación facial  3) ¡Listo!
 // ---------------------------------------------------------------------
 export function Register() {
-  const { register, setMode } = useStore();
+  const { register } = useStore();
   const wantsProvider = window.location.hash.includes("rol=proveedor");
   const [step, setStep] = useState(0);
-  const [f, setF] = useState({ name: "", document: "", phone: "", email: "", city: "" });
+  const [f, setF] = useState({ name: "", document: "", phone: "", email: "", password: "" });
+  const [ubic, setUbic] = useState({ departamento: "", municipio: "" });
   const [faceOk, setFaceOk] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [serverErr, setServerErr] = useState("");
+  const [showPass, setShowPass] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setF({ ...f, [k]: e.target.value }); setErrors({ ...errors, [k]: "" }); };
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => { setF({ ...f, [k]: e.target.value }); setErrors({ ...errors, [k]: "" }); };
 
   const validate = () => {
     const e: Record<string, string> = {};
-    if (f.name.trim().split(" ").length < 2) e.name = "Escribe tu nombre y apellido";
-    if (!/^\d[\d.]{5,}$/.test(f.document.trim())) e.document = "Número de documento no válido";
+    if (f.name.trim().split(/\s+/).length < 2) e.name = "Escribe tu nombre y apellido";
+    if (!/^\d[\d.]{5,14}$/.test(f.document.trim())) e.document = "Número de documento no válido";
     if (f.phone.replace(/\D/g, "").length !== 10) e.phone = "El celular debe tener 10 dígitos";
     if (!/^\S+@\S+\.\S+$/.test(f.email)) e.email = "Correo no válido";
-    if (!f.city) e.city = "Selecciona tu ciudad";
+    if (f.password.length < 6) e.password = "Mínimo 6 caracteres";
+    if (!ubic.departamento) e.departamento = "Selecciona tu departamento";
+    if (!ubic.municipio) e.municipio = "Selecciona tu ciudad o municipio";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
-  const startFace = () => {
-    if (!validate()) return;
-    setStep(1);
-  };
+  const startFace = () => { if (validate()) { setServerErr(""); setStep(1); } };
 
-  const finish = () => {
-    register(f);
-    setStep(2);
+  const finish = async () => {
+    setBusy(true); setServerErr("");
+    try {
+      await register({ ...f, phone: f.phone.replace(/\D/g, ""), ...ubic });
+      setStep(2);
+    } catch (e: any) {
+      setServerErr(e.message); setStep(0); setFaceOk(false);
+    } finally { setBusy(false); }
   };
 
   return (
@@ -235,6 +253,7 @@ export function Register() {
         <div className="animate-fade-up">
           <h1 className="mt-7 text-center text-[32px] font-extrabold tracking-tight">Crea tu cuenta</h1>
           <p className="text-center text-lg text-ink-soft">Ingresa tus datos para comenzar.</p>
+          {serverErr && <p className="mt-4 rounded-xl bg-bad-50 px-4 py-3 text-sm font-medium text-bad">{serverErr}</p>}
           <div className="mt-6 space-y-3">
             {([
               ["name", LuUser, "Nombre completo", "Ingresa tu nombre completo", "text"],
@@ -244,20 +263,20 @@ export function Register() {
             ] as const).map(([k, Icon, label, ph, type]) => (
               <div key={k}>
                 <Field icon={Icon} label={label} className={errors[k] ? "ring-2 ring-bad/50" : ""}>
-                  <input type={type} inputMode={k === "phone" || k === "document" ? "numeric" : undefined} className={cx(inputCls, "text-sm")} placeholder={ph} value={f[k]} onChange={set(k)} />
+                  <input name={k} type={type} inputMode={k === "phone" || k === "document" ? "numeric" : undefined} className={cx(inputCls, "text-sm")} placeholder={ph} value={f[k]} onChange={set(k)} />
                 </Field>
                 {errors[k] && <p className="mt-1 pl-4 text-xs font-medium text-bad">{errors[k]}</p>}
               </div>
             ))}
             <div>
-              <Field icon={LuMapPin} label="Departamento / Ciudad" trailing={<LuChevronDown className="h-6 w-6" />} className={errors.city ? "ring-2 ring-bad/50" : ""}>
-                <select className={cx(inputCls, "appearance-none text-sm", !f.city && "text-ink-soft/70")} value={f.city} onChange={set("city")}>
-                  <option value="">Selecciona tu departamento / ciudad</option>
-                  {CITIES.map((c) => <option key={c}>{c}</option>)}
-                </select>
+              <Field icon={LuLock} label="Contraseña" className={errors.password ? "ring-2 ring-bad/50" : ""}
+                trailing={<button type="button" onClick={() => setShowPass(!showPass)} aria-label="Mostrar contraseña">{showPass ? <LuEyeOff className="h-5 w-5" /> : <LuEye className="h-5 w-5" />}</button>}>
+                <input name="password" type={showPass ? "text" : "password"} autoComplete="new-password" className={cx(inputCls, "text-sm")} placeholder="Mínimo 6 caracteres" value={f.password} onChange={set("password")} />
               </Field>
-              {errors.city && <p className="mt-1 pl-4 text-xs font-medium text-bad">{errors.city}</p>}
+              {errors.password && <p className="mt-1 pl-4 text-xs font-medium text-bad">{errors.password}</p>}
             </div>
+            <UbicacionSelect value={ubic} onChange={(v) => { setUbic(v); setErrors({ ...errors, departamento: "", municipio: "" }); }}
+              errors={{ departamento: errors.departamento, municipio: errors.municipio }} />
           </div>
 
           <div className="mt-4 rounded-3xl bg-gradient-to-br from-[#eef0ff] to-[#f3eeff] p-4">
@@ -282,6 +301,7 @@ export function Register() {
         <FaceScan
           ok={faceOk}
           scanning={scanning}
+          busy={busy}
           onStart={() => { setScanning(true); setTimeout(() => { setScanning(false); setFaceOk(true); }, 3200); }}
           onBack={() => { setStep(0); setFaceOk(false); }}
           onContinue={finish}
@@ -292,18 +312,15 @@ export function Register() {
         <div className="animate-fade-up mt-8 text-center">
           <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-ok-50 text-ok"><LuCircleCheck className="h-14 w-14" /></div>
           <h1 className="mt-6 text-3xl font-extrabold">¡Listo, {f.name.split(" ")[0]}!</h1>
-          <p className="mx-auto mt-2 max-w-sm text-lg text-ink-soft">Tu identidad fue verificada y tu cuenta está activa. Ganaste <b className="text-ink">100 puntos</b> de bienvenida.</p>
-          <Button className="mt-8 w-full py-4" icon={LuArrowRight} onClick={() => {
-            if (wantsProvider) { navigate("/mi-servicio", true); }
-            else { setMode("cliente"); navigate("/rol", true); }
-          }}>Continuar</Button>
+          <p className="mx-auto mt-2 max-w-sm text-lg text-ink-soft">Tu cuenta quedó guardada y activa. Ganaste <b className="text-ink">100 puntos</b> de bienvenida.</p>
+          <Button className="mt-8 w-full py-4" icon={LuArrowRight} onClick={() => navigate(wantsProvider ? "/mi-servicio" : "/rol", true)}>Continuar</Button>
         </div>
       )}
     </AuthFrame>
   );
 }
 
-function FaceScan({ ok, scanning, onStart, onBack, onContinue }: { ok: boolean; scanning: boolean; onStart: () => void; onBack: () => void; onContinue: () => void }) {
+function FaceScan({ ok, scanning, busy, onStart, onBack, onContinue }: { ok: boolean; scanning: boolean; busy?: boolean; onStart: () => void; onBack: () => void; onContinue: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const [camera, setCamera] = useState<"pending" | "on" | "off">("pending");
   useEffect(() => {
@@ -336,7 +353,7 @@ function FaceScan({ ok, scanning, onStart, onBack, onContinue }: { ok: boolean; 
       {!ok ? (
         <Button className="mt-4 w-full" icon={LuCamera} onClick={onStart} disabled={scanning}>{scanning ? "Verificando…" : "Escanear rostro"}</Button>
       ) : (
-        <Button variant="dark" className="mt-4 w-full py-4" onClick={onContinue}>Registrarme en Conecta+PRO</Button>
+        <Button variant="dark" className="mt-4 w-full py-4" disabled={busy} onClick={onContinue}>{busy ? "Guardando tu cuenta…" : "Registrarme en Conecta+PRO"}</Button>
       )}
       <button onClick={onBack} className="mt-4 text-sm font-semibold text-ink-soft hover:text-ink">Volver a mis datos</button>
     </div>
@@ -348,9 +365,9 @@ function FaceScan({ ok, scanning, onStart, onBack, onContinue }: { ok: boolean; 
 // ---------------------------------------------------------------------
 export function RoleSelect() {
   const { account, setMode, myProvider } = useStore();
-  const go = (m: "cliente" | "proveedor") => {
+  const go = async (m: "cliente" | "proveedor") => {
     if (m === "proveedor" && !myProvider) return navigate("/mi-servicio");
-    setMode(m);
+    await setMode(m).catch(() => null);
     navigate("/inicio");
   };
   return (

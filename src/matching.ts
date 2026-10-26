@@ -8,7 +8,7 @@
 //  4. Proveedor compatible  lista ordenada por calificación y cercanía
 // =====================================================================
 
-import { PROVIDERS, Provider, ServiceId, Schedule } from "./data";
+import { ServiceId, Schedule } from "./data";
 
 export interface GeoPoint { lat: number; lng: number }
 
@@ -56,57 +56,8 @@ export function scheduleLabel(s: Schedule) {
   return `${days}: ${fmt(s.from)} - ${fmt(s.to)}`;
 }
 
-export interface Match {
-  provider: Provider;
-  distance: number;
-  availability: Availability;
-  score: number;
-}
-
-export interface MatchTrace {
-  total: number;
-  byCategory: number;
-  byCoverage: number;
-  bySchedule: number;
-}
-
-/**
- * Filtra exclusivamente los proveedores compatibles con la solicitud:
- *  - tienen registrada la categoría de servicio solicitada
- *  - la solicitud está dentro de su zona de cobertura
- *  - están activos (en horario laboral) ahora o más tarde hoy
- * y los ordena por reputación (calificación) y cercanía.
- */
-export function matchProviders(
-  service: ServiceId,
-  location: GeoPoint,
-  opts: { includeLater?: boolean; now?: Date; pool?: Provider[] } = {}
-) {
-  const now = opts.now ?? new Date();
-  const pool = opts.pool ?? PROVIDERS;
-  const trace: MatchTrace = { total: pool.length, byCategory: 0, byCoverage: 0, bySchedule: 0 };
-
-  const byCategory = pool.filter((p) => p.services.includes(service));
-  trace.byCategory = byCategory.length;
-
-  const withDistance = byCategory
-    .map((p) => ({ provider: p, distance: distanceKm(location, p) }))
-    .filter((m) => m.distance <= m.provider.coverageKm);
-  trace.byCoverage = withDistance.length;
-
-  const matches: Match[] = withDistance
-    .map((m) => ({ ...m, availability: availability(m.provider.schedule, now) }))
-    .filter((m) => opts.includeLater || m.availability !== "otro")
-    .map((m) => ({
-      ...m,
-      // Puntaje: reputación (peso alto) + cercanía + disponibilidad inmediata
-      score: m.provider.rating * 20 - m.distance * 1.5 + (m.availability === "ahora" ? 6 : 0) + (m.provider.verified ? 3 : 0),
-    }))
-    .sort((a, b) => b.score - a.score);
-  trace.bySchedule = matches.length;
-
-  return { matches, trace };
-}
+// El emparejamiento real se ejecuta en la base de datos (función cp_match en
+// supabase/schema.sql). Aquí quedan las utilidades que usa la interfaz.
 
 // =====================================================================
 //  IA predictiva de rutinas

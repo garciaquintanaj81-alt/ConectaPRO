@@ -1,75 +1,85 @@
-# ConectaPRO · Prototipo funcional
+# ConectaPRO · Plataforma web
 
 **Tu red de servicios, más cerca.** Plataforma web responsiva para la orquestación de servicios a demanda en entornos multisectoriales.
 
 Proyecto de Ingeniería de Sistemas – Universidad de Santander (UDES), Cúcuta.
 Autoras: Julieth A. García Quintana y Daniela S. Junco Salazar · Director: Miguel F. Robles Angarita.
 
-🔗 **Ver el prototipo:** https://garciaquintanaj81-alt.github.io/ConectaPRO/
+🔗 **Plataforma:** https://garciaquintanaj81-alt.github.io/ConectaPRO/
+🎬 **Simulación en vivo (2 clientes + 2 proveedores):** https://garciaquintanaj81-alt.github.io/ConectaPRO/#/simulador
 
-> Prototipo con **datos simulados**: todo lo que hagas se guarda en tu navegador. Para volver al estado inicial usa *Mi perfil → Seguridad y privacidad → Restablecer demo*.
+## Arquitectura
 
-## 🎬 Simulación en vivo (2 clientes + 2 proveedores)
+```
+Navegador (React + TypeScript + Tailwind)  ──HTTPS──▶  Supabase
+  publicado en GitHub Pages (/docs)                   ├─ Auth: registro e inicio de sesión (contraseñas cifradas, JWT)
+                                                      ├─ API REST (PostgREST): funciones api_* 
+                                                      └─ PostgreSQL: tablas, reglas de negocio y algoritmo
+```
 
-Abre **https://garciaquintanaj81-alt.github.io/ConectaPRO/#/simulador** en un computador: verás 4 celulares al mismo tiempo
-(Daniela y Juan como clientes, Carlos y Andrés como proveedores). Lo que hace uno le llega a los demás como **notificación en tiempo real**:
-Daniela publica → Carlos y Andrés reciben la alerta y se postulan → Daniela elige y firma el acuerdo → chatean → se califican.
+- **Base de datos real (PostgreSQL)**: usuarios, proveedores, solicitudes, postulaciones, acuerdos, calificaciones, mensajes, notificaciones, faltas, direcciones, métodos de pago, trueques y beneficios.
+- **Toda la lógica de negocio está en la base de datos** (`supabase/schema.sql`): el algoritmo de emparejamiento georreferenciado (`cp_match`), la regla de tres strikes, los acuerdos digitales, la calificación mutua, etc.
+- **Seguridad**: las tablas no se pueden leer ni modificar directamente desde internet (RLS activado sin políticas). Todo pasa por funciones `api_*` que validan quién es el usuario (`auth.uid()`) y qué puede hacer.
+- **Departamentos y municipios de Colombia**: 33 entidades (32 departamentos + Bogotá D.C.) y 1.105 municipios con coordenadas (fuente DIVIPOLA, con correcciones), guardados en las tablas `departamentos` y `municipios`.
+- **Tiempo real**: la app consulta el estado cada pocos segundos, así que notificaciones, postulaciones y mensajes llegan sin recargar.
 
-## Cómo probarlo
+## Funcionalidades
 
-1. Abre el enlace en el celular o en el computador (el diseño se adapta a ambos).
-2. En **Iniciar sesión** usa una cuenta de demostración:
-   - **Daniela** y **Juan** → rol *cliente*
-   - **Carlos** y **Andrés** → rol *proveedor*
-3. O crea una cuenta nueva desde *Registrarme* (incluye validación facial simulada con la cámara).
-
-### Recorrido sugerido (cliente)
-Inicio → **Publicar** solicitud → animación del **algoritmo de emparejamiento** → **Proveedores compatibles** (ordenados por calificación) → **Ver perfil** → **Contratar** → **Acuerdo digital** → *Mis solicitudes* → **Calificar servicio**.
-
-### Recorrido sugerido (proveedor)
-Inicio con oportunidades cercanas → **Aceptar** o proponer precio → *Mis trabajos* → **Marcar como realizado** → calificar al cliente. En *Mi servicio* se parametriza el oferente (empresa, categorías, cobertura, horario, precios, galería).
-
-## Funcionalidades incluidas
-
-| Módulo | Qué hace en el prototipo |
+| Módulo | Qué hace |
 |---|---|
-| Registro y autenticación | Registro con validación de datos, reconocimiento facial simulado (usa la cámara si se permite) e inicio de sesión |
-| Roles dinámicos | La misma persona cambia entre cliente y proveedor |
-| Publicación de solicitudes | Descripción, categoría, ubicación (GPS o manual), método de pago y propuestas |
-| **Algoritmo de emparejamiento** | Filtra por categoría, distancia (Haversine) dentro de la cobertura y horario laboral; ordena por reputación y cercanía (`src/matching.ts`) |
-| Notificaciones | Alertas a proveedores compatibles, postulaciones, acuerdos y mensajes |
-| Acuerdos digitales | Propuesta → Acuerdo → Confirmación, con contrato y código |
-| Mensajería | Chat con envío de fotos y respuestas simuladas |
-| Calificación mutua | Cliente califica al proveedor y viceversa |
-| Flexibilidad y penalizaciones | Plazo adicional de 2 días con registro de impuntualidad |
-| Regla de “Tres Strikes” | Faltas graves acumuladas y suspensión de la cuenta |
-| Match por trueque | Intercambio de habilidades sin dinero |
-| IA predictiva de rutinas | Detecta servicios repetidos (≥3 veces con frecuencia similar) y sugiere volver a contactar |
-| Fidelización con aliados | Puntos, niveles y cupones de ejemplo |
+| Registro e inicio de sesión | Cuenta con correo y contraseña, documento, celular, **departamento y municipio** (listas encadenadas) y validación facial |
+| Roles dinámicos | La misma persona puede ser cliente y proveedor |
+| Explorar | Filtro por **departamento → municipio** (solo aparecen los municipios del departamento elegido), categoría, texto y disponibilidad. Muestra los proveedores ubicados en el municipio y los de municipios vecinos cuya cobertura lo incluye |
+| Publicar solicitud | Departamento, municipio, dirección, GPS (detecta el municipio más cercano), categoría y método de pago |
+| Algoritmo de emparejamiento | Categoría + distancia (Haversine) dentro de la cobertura + horario; ordena por reputación y cercanía |
+| Postulaciones y acuerdos | El proveedor propone precio; el cliente elige y se genera el contrato digital con código |
+| Mensajería | Chat entre cliente y proveedor con fotos |
+| Calificación mutua | Actualiza la reputación de ambos |
+| Flexibilidad y tres strikes | Plazo adicional con penalización de puntualidad; suspensión al acumular 3 faltas graves |
+| Trueque, IA predictiva y beneficios | Ofertas de trueque, sugerencia de servicios recurrentes y canje de puntos |
+| CRUD completo | Crear, consultar, editar y eliminar: perfil, servicio del proveedor y portafolio, solicitudes, direcciones, métodos de pago, ofertas de trueque y la cuenta |
 
-## Tecnologías
+**Datos de ejemplo:** se cargan 40 proveedores en 13 municipios (Rionegro, Medellín, Cúcuta, Villa del Rosario, Los Patios, Pamplona, Ocaña, Bucaramanga, Floridablanca, Bogotá, Cali, Barranquilla, Cartagena) y solicitudes abiertas. Los proveedores de ejemplo que no tienen cuenta de acceso responden automáticamente a las solicitudes para que la plataforma se pueda probar; los usuarios reales responden desde su propia cuenta. Se desactiva con `update config set valor = 'false' where clave = 'auto_respuesta_demo';`.
 
-React 19 · TypeScript · Tailwind CSS 4 · esbuild. Se publica como sitio estático en GitHub Pages (carpeta `/docs`).
-En la fase de desarrollo final se integrarán Next.js, PostgreSQL y autenticación real, como se plantea en el proyecto.
+**Cuentas de demostración** (contraseña `Conecta2026*`): daniela@conectapro.co y juan@conectapro.co (clientes), carlos@conectapro.co y andres@conectapro.co (proveedores). También aparecen como botones en *Iniciar sesión*.
 
-## Ejecutar en tu computador (opcional)
+## Instalación de la base de datos (Supabase)
+
+1. Crea un proyecto en [supabase.com](https://supabase.com).
+2. En **Authentication → Sign In / Providers → Email**, desactiva **Confirm email**.
+3. En **SQL Editor → New query**, pega todo el contenido de [`supabase/instalar.sql`](supabase/instalar.sql) y presiona **Run**. Se puede volver a ejecutar sin perder los datos de usuarios reales.
+4. Copia la **Project URL** y la **publishable key** (Project Settings → API Keys) en [`public/config.js`](public/config.js) y vuelve a compilar (`npm run build`).
+
+## Desarrollo local
+
+Requiere Node.js y PostgreSQL.
 
 ```bash
 npm install
-npm run dev     # abre http://localhost:5173
-npm run build   # genera la carpeta /docs que publica GitHub Pages
+createdb conectapro
+psql -d conectapro -f server/local-auth-shim.sql   # solo local: imita el esquema auth de Supabase
+psql -d conectapro -f supabase/instalar.sql
+npm run build
+node server/dev-server.mjs                         # http://localhost:8787 (emula Supabase sobre el PostgreSQL local)
 ```
 
 ## Estructura
 
 ```
+supabase/
+  schema.sql          Tablas, seguridad y API (funciones api_*)
+  demo.sql            Datos de ejemplo de solicitudes, chats y notificaciones (reiniciables)
+  seed.sql            Departamentos, municipios, catálogo y proveedores (generado por generar_seed.py)
+  instalar.sql        schema + seed en un solo archivo para Supabase
+server/
+  dev-server.mjs      Servidor local que imita Supabase (Auth + RPC) para pruebas
 src/
-  data.ts        Datos simulados (servicios, proveedores, clientes)
-  matching.ts    Algoritmo de emparejamiento georreferenciado + IA predictiva
-  store.tsx      Estado global (simula el backend, guarda en localStorage)
-  Layout.tsx     Menú lateral (computador) y barra inferior (móvil)
-  ui.tsx         Componentes visuales reutilizables
-  screens/       Pantallas: Auth, Client, Provider, Common
-public/img/      Imágenes tomadas de los mockups
-docs/            Versión compilada (lo que se publica)
+  api.ts              Cliente de la API (Auth + RPC) sin librerías externas
+  store.tsx           Estado de la app conectado a la base de datos
+  geo.tsx             Selectores encadenados de departamento y municipio
+  screens/            Pantallas: Auth, Client, Provider, Common, Simulator
+public/config.js      URL y clave pública de Supabase
+docs/                 Versión compilada que publica GitHub Pages
 ```
+
+> Nota: la validación facial usa la cámara del dispositivo, pero el reconocimiento biométrico real requiere un servicio especializado de terceros (fase futura del proyecto).

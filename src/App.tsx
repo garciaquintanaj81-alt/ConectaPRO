@@ -1,4 +1,4 @@
-import { LuTriangleAlert, LuRefreshCw } from "react-icons/lu";
+import { LuTriangleAlert, LuRefreshCw, LuLogOut, LuDatabase } from "react-icons/lu";
 import { useStore } from "./store";
 import { match, navigate, useRoute } from "./router";
 import { Button, Empty } from "./ui";
@@ -19,15 +19,29 @@ type Route = [string, (p: Record<string, string>) => JSX.Element];
 
 export default function App() {
   const path = useRoute();
-  const { session, mode, strikes, toastMsg, reset } = useStore();
+  const { session, mode, strikes, toastMsg, resetDemo, logout, phase, bootError, account } = useStore();
   const logged = !!session;
   const isPublic = path === "/" || path === "/login" || path === "/registro" || path === "/simulador";
 
+  // El simulador le pide a esta pantalla reiniciar los datos de ejemplo
+  useEffect(() => {
+    const on = (e: MessageEvent) => {
+      if (e.data === "cp-reset-demo") resetDemo().catch(() => null).finally(() => window.parent?.postMessage("cp-reset-done", "*"));
+    };
+    window.addEventListener("message", on);
+    return () => window.removeEventListener("message", on);
+  }, []);
+
   // Redirecciones de sesión
   useEffect(() => {
+    if (phase !== "listo") return;
     if (!logged && !isPublic) navigate("/", true);
     if (logged && (path === "/" || path === "/login")) navigate("/inicio", true);
-  }, [logged, path]);
+  }, [logged, path, phase]);
+
+  if (phase === "cargando") return <Splash />;
+  if (phase === "sin-config") return <SetupNeeded />;
+  if (phase === "error") return <Splash error={bootError} />;
 
   const routes: Route[] = [
     ["/", () => <Welcome />],
@@ -67,8 +81,10 @@ export default function App() {
   else if (logged && strikes >= 3 && !path.startsWith("/perfil")) {
     page = (
       <AppShell hideNav>
-        <Empty icon={LuTriangleAlert} title="Cuenta suspendida" text="Acumulaste 3 faltas graves. Por la seguridad de la comunidad tu cuenta fue suspendida. (En esta demo puedes restablecer los datos.)"
-          action={<Button icon={LuRefreshCw} onClick={() => { reset(); navigate("/", true); }}>Restablecer demo</Button>} />
+        <Empty icon={LuTriangleAlert} title="Cuenta suspendida" text="Acumulaste 3 faltas graves. Por la seguridad de la comunidad tu cuenta fue suspendida."
+          action={account?.demo
+            ? <Button icon={LuRefreshCw} onClick={() => resetDemo().then(() => navigate("/inicio", true))}>Reiniciar datos de ejemplo</Button>
+            : <Button variant="dark" icon={LuLogOut} onClick={() => logout().then(() => navigate("/", true))}>Cerrar sesión</Button>} />
       </AppShell>
     );
   } else {
@@ -124,5 +140,32 @@ function PushBanner({ path }: { path: string }) {
         <div className="mt-0.5 text-[14px] font-semibold leading-snug text-ink">{show.text}</div>
       </div>
     </button>
+  );
+}
+
+function Splash({ error }: { error?: string }) {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-surface px-6 text-center">
+      <img src="img/logo.png" alt="" className={error ? "h-20 w-20" : "h-20 w-20 animate-pulse"} />
+      <div className="text-2xl font-extrabold">Conecta<span className="text-brand-blue">+</span><span className="text-brand-gradient">PRO</span></div>
+      {error ? (
+        <>
+          <p className="max-w-sm text-ink-soft">No pudimos conectar con el servidor: <b className="text-ink">{error}</b></p>
+          <Button icon={LuRefreshCw} onClick={() => location.reload()}>Reintentar</Button>
+        </>
+      ) : <p className="text-ink-soft">Conectando con la base de datos…</p>}
+    </div>
+  );
+}
+
+function SetupNeeded() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-surface px-6">
+      <div className="card max-w-lg p-8 text-center">
+        <LuDatabase className="mx-auto h-12 w-12 text-brand" />
+        <h1 className="mt-4 text-2xl font-extrabold">Falta conectar la base de datos</h1>
+        <p className="mt-2 text-ink-soft">Edita el archivo <code className="rounded bg-surface px-1.5">config.js</code> con la URL y la clave pública (anon) de tu proyecto de Supabase. Los pasos están en el README del repositorio.</p>
+      </div>
+    </div>
   );
 }

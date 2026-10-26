@@ -1,0 +1,2754 @@
+-- =====================================================================
+--  ConectaPRO · INSTALACIÓN COMPLETA PARA SUPABASE
+--  Pega TODO este archivo en Supabase → SQL Editor → New query → Run.
+--  Crea tablas, API segura, 33 departamentos, 1.105 municipios y datos de ejemplo.
+--  Se puede ejecutar más de una vez sin perder los datos de usuarios reales.
+-- =====================================================================
+
+-- =====================================================================
+--  ConectaPRO · Esquema de base de datos (PostgreSQL / Supabase)
+--  Tablas + API (funciones RPC) + seguridad.
+--
+--  Seguridad: las tablas NO son accesibles directamente desde internet
+--  (RLS activado sin políticas). Todo pasa por funciones api_* que
+--  validan quién es el usuario (auth.uid()) y qué puede hacer.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+--  1. Catálogos
+-- ---------------------------------------------------------------------
+create table if not exists departamentos (
+  codigo text primary key,
+  nombre text not null,
+  lat double precision,
+  lng double precision
+);
+
+create table if not exists municipios (
+  codigo text primary key,
+  departamento text not null references departamentos(codigo) on delete cascade,
+  nombre text not null,
+  lat double precision not null,
+  lng double precision not null
+);
+create index if not exists municipios_depto_idx on municipios(departamento, nombre);
+
+create table if not exists categorias (
+  id text primary key,
+  nombre text not null,
+  orden int not null default 0
+);
+
+create table if not exists servicios (
+  id text primary key,
+  nombre text not null,
+  corto text not null,
+  categoria text not null references categorias(id),
+  foto text,
+  orden int not null default 0
+);
+
+create table if not exists aliados (
+  id serial primary key,
+  marca text not null,
+  oferta text not null,
+  costo int not null check (costo > 0),
+  color text
+);
+
+create table if not exists config (
+  clave text primary key,
+  valor text not null
+);
+
+-- ---------------------------------------------------------------------
+--  2. Usuarios y proveedores
+-- ---------------------------------------------------------------------
+create table if not exists perfiles (
+  id uuid primary key default gen_random_uuid(),
+  auth_id uuid unique,                       -- usuario de autenticación (auth.users.id)
+  nombre text not null,
+  documento text unique,
+  celular text,
+  correo text unique,
+  departamento text references departamentos(codigo),
+  municipio text references municipios(codigo),
+  foto text,
+  rol_activo text not null default 'cliente' check (rol_activo in ('cliente','proveedor')),
+  puntos int not null default 100,
+  verificado boolean not null default false,
+  calificacion numeric(2,1) not null default 5.0,
+  num_resenas int not null default 0,
+  notif_push boolean not null default true,
+  notif_email boolean not null default true,
+  notif_ia boolean not null default true,
+  demo boolean not null default false,       -- datos de ejemplo
+  creado timestamptz not null default now()
+);
+
+create table if not exists proveedores (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null unique references perfiles(id) on delete cascade,
+  empresa text not null,
+  profesion text not null,
+  departamento text not null references departamentos(codigo),
+  municipio text not null references municipios(codigo),
+  lat double precision not null,
+  lng double precision not null,
+  cobertura_km int not null default 10 check (cobertura_km between 1 and 100),
+  dias int[] not null default '{1,2,3,4,5,6}',
+  hora_desde int not null default 8 check (hora_desde between 0 and 24),
+  hora_hasta int not null default 18 check (hora_hasta between 0 and 24),
+  precio_min int not null default 0,
+  precio_max int not null default 0,
+  descripcion text not null default '',
+  ofrece text[] not null default '{}',
+  telefono text,
+  calificacion numeric(2,1) not null default 5.0,
+  num_resenas int not null default 0,
+  completados int not null default 0,
+  verificado boolean not null default true,
+  activo boolean not null default true,
+  calificacion_ini numeric(2,1), resenas_ini int, completados_ini int,   -- valores de ejemplo (para reiniciar demo)
+  creado timestamptz not null default now()
+);
+create index if not exists proveedores_ubic_idx on proveedores(departamento, municipio);
+
+create table if not exists proveedor_servicios (
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  servicio_id text not null references servicios(id),
+  primary key (proveedor_id, servicio_id)
+);
+
+create table if not exists portafolio (
+  id uuid primary key default gen_random_uuid(),
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  imagen text not null,
+  orden int not null default 0,
+  creado timestamptz not null default now()
+);
+
+create table if not exists direcciones (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  nombre text not null,
+  direccion text not null,
+  departamento text not null references departamentos(codigo),
+  municipio text not null references municipios(codigo),
+  creado timestamptz not null default now()
+);
+
+create table if not exists metodos_pago (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  tipo text not null check (tipo in ('efectivo','nequi','transferencia','tarjeta')),
+  detalle text not null default '',
+  predeterminado boolean not null default false,
+  creado timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------
+--  3. Solicitudes, emparejamiento y acuerdos
+-- ---------------------------------------------------------------------
+create table if not exists solicitudes (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references perfiles(id) on delete cascade,
+  titulo text not null,
+  descripcion text not null,
+  servicio_id text not null references servicios(id),
+  departamento text not null references departamentos(codigo),
+  municipio text not null references municipios(codigo),
+  lat double precision not null,
+  lng double precision not null,
+  direccion text not null default '',
+  metodo_pago text not null check (metodo_pago in ('efectivo','nequi','transferencia','tarjeta')),
+  recibir_propuestas boolean not null default true,
+  estado text not null default 'buscando' check (estado in ('buscando','en_curso','completada','cancelada')),
+  proveedor_id uuid references proveedores(id) on delete set null,
+  foto text,
+  penalizacion_puntualidad boolean not null default false,
+  traza jsonb,
+  creado timestamptz not null default now(),
+  finalizado timestamptz
+);
+create index if not exists solicitudes_cliente_idx on solicitudes(cliente_id);
+create index if not exists solicitudes_estado_idx on solicitudes(estado, servicio_id);
+create index if not exists solicitudes_prov_idx on solicitudes(proveedor_id);
+
+create table if not exists solicitud_notificados (
+  solicitud_id uuid not null references solicitudes(id) on delete cascade,
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  distancia_km numeric(6,2),
+  primary key (solicitud_id, proveedor_id)
+);
+
+create table if not exists postulaciones (
+  id uuid primary key default gen_random_uuid(),
+  solicitud_id uuid not null references solicitudes(id) on delete cascade,
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  precio int not null check (precio > 0),
+  nota text,
+  visible_desde timestamptz not null default now(),
+  creado timestamptz not null default now(),
+  unique (solicitud_id, proveedor_id)
+);
+
+create table if not exists descartes (
+  solicitud_id uuid not null references solicitudes(id) on delete cascade,
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  primary key (solicitud_id, proveedor_id)
+);
+
+create sequence if not exists acuerdo_seq start 500;
+create table if not exists acuerdos (
+  solicitud_id uuid primary key references solicitudes(id) on delete cascade,
+  codigo text not null unique,
+  fecha date not null,
+  hora time not null,
+  precio int not null,
+  plazo_extra_dias int not null default 0,
+  firmado timestamptz not null default now()
+);
+
+create table if not exists calificaciones (
+  id uuid primary key default gen_random_uuid(),
+  solicitud_id uuid not null references solicitudes(id) on delete cascade,
+  autor_id uuid not null references perfiles(id) on delete cascade,
+  rol_autor text not null check (rol_autor in ('cliente','proveedor')),
+  estrellas int not null check (estrellas between 1 and 5),
+  comentario text not null default '',
+  creado timestamptz not null default now(),
+  unique (solicitud_id, rol_autor)
+);
+
+create table if not exists faltas (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  solicitud_id uuid references solicitudes(id) on delete set null,
+  motivo text not null,
+  creado timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------
+--  4. Mensajería y notificaciones
+-- ---------------------------------------------------------------------
+create table if not exists conversaciones (
+  id uuid primary key default gen_random_uuid(),
+  usuario_a uuid not null references perfiles(id) on delete cascade,
+  usuario_b uuid not null references perfiles(id) on delete cascade,
+  creado timestamptz not null default now(),
+  check (usuario_a < usuario_b),
+  unique (usuario_a, usuario_b)
+);
+
+create table if not exists mensajes (
+  id uuid primary key default gen_random_uuid(),
+  conversacion_id uuid not null references conversaciones(id) on delete cascade,
+  autor_id uuid references perfiles(id) on delete cascade,   -- null = mensaje del sistema
+  texto text,
+  imagen text,
+  creado timestamptz not null default now()
+);
+create index if not exists mensajes_conv_idx on mensajes(conversacion_id, creado);
+
+create table if not exists lecturas (
+  conversacion_id uuid not null references conversaciones(id) on delete cascade,
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  leido_hasta timestamptz not null default now(),
+  primary key (conversacion_id, perfil_id)
+);
+
+create table if not exists notificaciones (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  tipo text not null,
+  texto text not null,
+  enlace text,
+  leida boolean not null default false,
+  creado timestamptz not null default now()
+);
+create index if not exists notificaciones_perfil_idx on notificaciones(perfil_id, creado desc);
+
+-- ---------------------------------------------------------------------
+--  5. Trueque y fidelización
+-- ---------------------------------------------------------------------
+create table if not exists trueque_ofertas (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  ofrece text not null references servicios(id),
+  necesita text not null references servicios(id),
+  nota text not null default '',
+  activo boolean not null default true,
+  creado timestamptz not null default now()
+);
+
+create table if not exists canjes (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  aliado_id int not null references aliados(id),
+  codigo text not null,
+  creado timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------
+--  6. Seguridad: nadie accede a las tablas directamente
+-- ---------------------------------------------------------------------
+do $$
+declare t text;
+begin
+  for t in select tablename from pg_tables where schemaname = 'public' loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from anon, authenticated', t);
+  end loop;
+end $$;
+revoke all on sequence acuerdo_seq from anon, authenticated;
+revoke all on all sequences in schema public from anon, authenticated;
+
+-- =====================================================================
+--  FUNCIONES AUXILIARES
+-- =====================================================================
+create or replace function cp_ms(t timestamptz) returns bigint
+language sql immutable as $$ select (extract(epoch from t) * 1000)::bigint $$;
+
+-- "Municipio, Departamento" (sin repetir cuando son iguales, p. ej. Bogotá D.C.)
+create or replace function cp_lugar(mun text, dep text) returns text
+language sql immutable as $$ select case when mun = dep then mun else mun || ', ' || dep end $$;
+
+-- Distancia en km (fórmula de Haversine)
+create or replace function cp_dist(a_lat double precision, a_lng double precision, b_lat double precision, b_lng double precision)
+returns double precision language sql immutable as $$
+  select 2 * 6371 * asin(sqrt(
+    power(sin(radians(b_lat - a_lat) / 2), 2) +
+    cos(radians(a_lat)) * cos(radians(b_lat)) * power(sin(radians(b_lng - a_lng) / 2), 2)))
+$$;
+
+-- ¿El proveedor está en su horario? (hora de Colombia)
+create or replace function cp_disponibilidad(p_dias int[], p_desde int, p_hasta int)
+returns text language sql stable as $$
+  with n as (select (now() at time zone 'America/Bogota') as t)
+  select case
+    when extract(dow from t)::int = any(p_dias) then
+      case
+        when extract(hour from t) + extract(minute from t) / 60 >= p_desde
+         and extract(hour from t) + extract(minute from t) / 60 < p_hasta then 'ahora'
+        when extract(hour from t) < p_desde then 'hoy'
+        else 'otro' end
+    else 'otro' end
+  from n
+$$;
+
+-- Perfil del usuario que hace la petición
+create or replace function cp_yo() returns uuid
+language sql stable security definer set search_path = public as $$
+  select id from perfiles where auth_id = auth.uid()
+$$;
+
+create or replace function cp_req() returns uuid
+language plpgsql stable security definer set search_path = public as $$
+declare v uuid;
+begin
+  select id into v from perfiles where auth_id = auth.uid();
+  if v is null then raise exception 'Debes iniciar sesión para continuar' using errcode = '28000'; end if;
+  return v;
+end $$;
+
+create or replace function cp_faltas(p uuid) returns int
+language sql stable security definer set search_path = public as $$
+  select count(*)::int from faltas where perfil_id = p
+$$;
+
+create or replace function cp_no_suspendido(p uuid) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if cp_faltas(p) >= 3 then
+    raise exception 'Tu cuenta está suspendida por acumular 3 faltas graves';
+  end if;
+end $$;
+
+create or replace function cp_notificar(p_perfil uuid, p_tipo text, p_texto text, p_enlace text)
+returns void language sql security definer set search_path = public as $$
+  insert into notificaciones (perfil_id, tipo, texto, enlace) values (p_perfil, p_tipo, p_texto, p_enlace)
+$$;
+
+create or replace function cp_mi_proveedor(p uuid) returns uuid
+language sql stable security definer set search_path = public as $$
+  select id from proveedores where perfil_id = p
+$$;
+
+-- Proveedor en formato JSON (el mismo formato que usa la aplicación)
+create or replace function cp_proveedor_json(pid uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', p.id, 'userId', p.perfil_id, 'name', pe.nombre, 'photo', pe.foto,
+    'company', p.empresa, 'profession', p.profesion,
+    'services', coalesce((select jsonb_agg(servicio_id order by servicio_id) from proveedor_servicios where proveedor_id = p.id), '[]'::jsonb),
+    'rating', p.calificacion, 'reviews', p.num_resenas, 'lat', p.lat, 'lng', p.lng,
+    'departamento', p.departamento, 'municipio', p.municipio,
+    'city', cp_lugar(m.nombre, d.nombre), 'coverageKm', p.cobertura_km,
+    'schedule', jsonb_build_object('days', to_jsonb(p.dias), 'from', p.hora_desde, 'to', p.hora_hasta),
+    'priceMin', p.precio_min, 'priceMax', p.precio_max, 'verified', p.verificado,
+    'about', p.descripcion, 'offers', to_jsonb(p.ofrece),
+    'portfolio', coalesce((select jsonb_agg(imagen order by orden, creado) from portafolio where proveedor_id = p.id), '[]'::jsonb),
+    'phone', p.telefono, 'completed', p.completados,
+    'availability', cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta))
+  from proveedores p
+  join perfiles pe on pe.id = p.perfil_id
+  join municipios m on m.codigo = p.municipio
+  join departamentos d on d.codigo = p.departamento
+  where p.id = pid
+$$;
+
+-- Solicitud en formato JSON
+create or replace function cp_solicitud_json(sid uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', s.id, 'ownerAccountId', s.cliente_id, 'clientKey', s.cliente_id,
+    'title', s.titulo, 'desc', s.descripcion, 'service', s.servicio_id,
+    'location', jsonb_build_object('lat', s.lat, 'lng', s.lng,
+       'label', coalesce(nullif(s.direccion, '') || ' · ', '') || cp_lugar(m.nombre, d.nombre)),
+    'departamento', s.departamento, 'municipio', s.municipio,
+    'municipioNombre', m.nombre, 'departamentoNombre', d.nombre, 'direccion', s.direccion,
+    'payment', s.metodo_pago, 'wantsProposals', s.recibir_propuestas,
+    'createdAt', cp_ms(s.creado), 'status', s.estado,
+    'matched', coalesce((select jsonb_agg(proveedor_id) from solicitud_notificados where solicitud_id = s.id), '[]'::jsonb),
+    'applicants', coalesce((select jsonb_agg(jsonb_build_object('providerId', proveedor_id, 'price', precio, 'at', cp_ms(visible_desde), 'note', nota) order by visible_desde)
+                            from postulaciones where solicitud_id = s.id), '[]'::jsonb),
+    'declinedBy', coalesce((select jsonb_agg(proveedor_id) from descartes where solicitud_id = s.id), '[]'::jsonb),
+    'providerId', s.proveedor_id,
+    'agreement', (select jsonb_build_object('date', to_char(a.fecha, 'YYYY-MM-DD'), 'time', to_char(a.hora, 'HH24:MI'),
+                    'price', a.precio, 'code', a.codigo, 'signedAt', cp_ms(a.firmado), 'extendedDays', nullif(a.plazo_extra_dias, 0))
+                  from acuerdos a where a.solicitud_id = s.id),
+    'rating', (select jsonb_build_object('stars', estrellas, 'comment', comentario, 'at', cp_ms(creado))
+               from calificaciones where solicitud_id = s.id and rol_autor = 'cliente'),
+    'clientRating', (select jsonb_build_object('stars', estrellas, 'comment', comentario, 'at', cp_ms(creado))
+               from calificaciones where solicitud_id = s.id and rol_autor = 'proveedor'),
+    'finishedAt', cp_ms(s.finalizado), 'photo', s.foto,
+    'punctualityPenalty', s.penalizacion_puntualidad, 'trace', s.traza)
+  from solicitudes s
+  join municipios m on m.codigo = s.municipio
+  join departamentos d on d.codigo = s.departamento
+  where s.id = sid
+$$;
+
+create or replace function cp_cliente_json(p uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('id', id, 'name', nombre, 'photo', foto, 'rating', calificacion, 'reviews', num_resenas)
+  from perfiles where id = p
+$$;
+
+-- =====================================================================
+--  ALGORITMO DE EMPAREJAMIENTO GEORREFERENCIADO
+--  1) categoría  2) distancia (Haversine) dentro de la cobertura
+--  3) disponibilidad horaria  4) ordena por reputación y cercanía
+-- =====================================================================
+create or replace function cp_match(p_servicio text, p_lat double precision, p_lng double precision, p_excluir uuid default null)
+returns table (proveedor_id uuid, perfil_id uuid, distancia double precision, disponibilidad text, puntaje double precision)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.perfil_id, d.km, a.disp,
+         p.calificacion * 20 - d.km * 1.5
+           + case when a.disp = 'ahora' then 6 else 0 end
+           + case when p.verificado then 3 else 0 end
+  from proveedores p
+  join proveedor_servicios ps on ps.proveedor_id = p.id and ps.servicio_id = p_servicio
+  cross join lateral (select cp_dist(p_lat, p_lng, p.lat, p.lng) as km) d
+  cross join lateral (select cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta) as disp) a
+  where p.activo and d.km <= p.cobertura_km
+    and (p_excluir is null or p.perfil_id <> p_excluir)
+  order by 5 desc
+$$;
+
+-- =====================================================================
+--  API PÚBLICA (no requiere sesión)
+-- =====================================================================
+create or replace function api_catalogo() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'categorias', (select jsonb_agg(jsonb_build_object('id', id, 'name', nombre) order by orden) from categorias),
+    'servicios', (select jsonb_agg(jsonb_build_object('id', id, 'name', nombre, 'short', corto, 'category', categoria, 'photo', foto) order by orden) from servicios))
+$$;
+
+create or replace function api_departamentos() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('codigo', codigo, 'nombre', nombre) order by nombre), '[]'::jsonb) from departamentos
+$$;
+
+create or replace function api_municipios(p_departamento text) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('codigo', codigo, 'nombre', nombre, 'lat', lat, 'lng', lng) order by nombre), '[]'::jsonb)
+  from municipios where departamento = p_departamento
+$$;
+
+-- Municipio más cercano a unas coordenadas GPS
+create or replace function api_municipio_cercano(p_lat double precision, p_lng double precision) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('codigo', m.codigo, 'nombre', m.nombre, 'departamento', m.departamento,
+                            'departamentoNombre', d.nombre, 'distanciaKm', round(cp_dist(p_lat, p_lng, m.lat, m.lng)::numeric, 1))
+  from municipios m join departamentos d on d.codigo = m.departamento
+  order by cp_dist(p_lat, p_lng, m.lat, m.lng) limit 1
+$$;
+
+create or replace function api_aliados() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'brand', marca, 'offer', oferta, 'cost', costo, 'color', color) order by costo), '[]'::jsonb) from aliados
+$$;
+
+create or replace function api_demo_cuentas() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('email', pe.correo, 'name', pe.nombre, 'photo', pe.foto,
+           'role', case when p.id is null then 'Cliente' else 'Proveedor' end) order by pe.creado), '[]'::jsonb)
+  from perfiles pe left join proveedores p on p.perfil_id = pe.id
+  where pe.demo and pe.correo in (select valor from config where clave like 'demo_login_%')
+$$;
+
+-- Búsqueda de proveedores por ubicación (departamento / municipio), categoría y texto
+create or replace function api_buscar_proveedores(
+  p_departamento text default null, p_municipio text default null, p_categoria text default null,
+  p_texto text default null, p_solo_ahora boolean default false, p_orden text default 'rating')
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v_lat double precision; v_lng double precision; v_yo uuid := cp_yo(); v_ref text; res jsonb;
+begin
+  p_departamento := nullif(p_departamento, ''); p_municipio := nullif(p_municipio, '');
+  p_categoria := nullif(p_categoria, ''); p_texto := nullif(trim(coalesce(p_texto, '')), '');
+  if p_municipio is not null then
+    select m.lat, m.lng, cp_lugar(m.nombre, d.nombre) into v_lat, v_lng, v_ref
+    from municipios m join departamentos d on d.codigo = m.departamento where m.codigo = p_municipio;
+  elsif p_departamento is not null then
+    select lat, lng, nombre into v_lat, v_lng, v_ref from departamentos where codigo = p_departamento;
+  end if;
+
+  with base as (
+    select p.*, pe.nombre as pnombre,
+           case when v_lat is null then null else cp_dist(v_lat, v_lng, p.lat, p.lng) end as km,
+           cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta) as disp
+    from proveedores p join perfiles pe on pe.id = p.perfil_id
+    where p.activo and (v_yo is null or p.perfil_id <> v_yo)
+  ), filtrados as (
+    select b.*,
+           case when p_municipio is not null then (case when b.municipio = p_municipio then 'local' else 'cobertura' end)
+                when p_departamento is not null then 'local' else 'local' end as ubic
+    from base b
+    where (p_municipio is null or b.municipio = p_municipio or b.km <= b.cobertura_km)
+      and (p_municipio is not null or p_departamento is null or b.departamento = p_departamento)
+      and (p_categoria is null or p_categoria = 'mas' or exists (
+            select 1 from proveedor_servicios ps join servicios s on s.id = ps.servicio_id
+            where ps.proveedor_id = b.id and s.categoria = p_categoria))
+      and (p_texto is null or (b.pnombre || ' ' || b.profesion || ' ' || b.empresa || ' ' || coalesce((
+            select string_agg(s.nombre, ' ') from proveedor_servicios ps join servicios s on s.id = ps.servicio_id where ps.proveedor_id = b.id), ''))
+            ilike '%' || p_texto || '%')
+      and (not p_solo_ahora or b.disp = 'ahora')
+  )
+  select jsonb_build_object(
+    'referencia', v_ref,
+    'total', (select count(*) from filtrados),
+    'resultados', coalesce((select jsonb_agg(cp_proveedor_json(f.id) || jsonb_build_object('distanceKm', round(f.km::numeric, 1), 'ubicacion', f.ubic)
+        order by case when p_orden = 'distance' then f.km end asc nulls last,
+                 case when f.ubic = 'local' then 0 else 1 end, f.calificacion desc, f.num_resenas desc)
+      from filtrados f), '[]'::jsonb))
+  into res;
+  return res;
+end $$;
+
+create or replace function api_proveedor(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select cp_proveedor_json(p_id) || jsonb_build_object('resenas', coalesce((
+    select jsonb_agg(jsonb_build_object('name', split_part(pe.nombre, ' ', 1) || ' ' || left(split_part(pe.nombre, ' ', 2), 1) || '.',
+                                        'stars', c.estrellas, 'text', c.comentario, 'date', to_char(c.creado, 'DD/MM/YYYY')) order by c.creado desc)
+    from calificaciones c join solicitudes s on s.id = c.solicitud_id join perfiles pe on pe.id = c.autor_id
+    where s.proveedor_id = p_id and c.rol_autor = 'cliente' and c.comentario <> ''), '[]'::jsonb))
+$$;
+
+create or replace function api_vista_previa(p_servicio text, p_municipio text) returns int
+language sql stable security definer set search_path = public as $$
+  select count(*)::int from municipios m, cp_match(p_servicio, m.lat, m.lng, cp_yo()) where m.codigo = p_municipio
+$$;
+
+-- =====================================================================
+--  API DE CUENTA
+-- =====================================================================
+create or replace function cp_cuenta_json(p uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'id', pe.id, 'name', pe.nombre, 'email', pe.correo, 'phone', coalesce(pe.celular, ''), 'document', coalesce(pe.documento, ''),
+    'departamento', pe.departamento, 'municipio', pe.municipio,
+    'city', coalesce(cp_lugar(m.nombre, d.nombre), ''), 'photo', pe.foto, 'clientId', pe.id,
+    'providerId', (select id from proveedores where perfil_id = pe.id), 'verified', pe.verificado, 'demo', pe.demo)
+  from perfiles pe left join municipios m on m.codigo = pe.municipio left join departamentos d on d.codigo = pe.departamento
+  where pe.id = p
+$$;
+
+-- Se llama después de crear el usuario de autenticación
+create or replace function api_completar_registro(
+  p_nombre text default null, p_documento text default null, p_celular text default null,
+  p_departamento text default null, p_municipio text default null)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); v uuid; v_correo text;
+begin
+  if uid is null then raise exception 'Debes iniciar sesión' using errcode = '28000'; end if;
+  select id into v from perfiles where auth_id = uid;
+  if v is not null then return cp_cuenta_json(v); end if;
+  v_correo := lower(coalesce(auth.jwt() ->> 'email', (select email from auth.users where id = uid)));
+  -- Cuentas de demostración: se vinculan al perfil de ejemplo con el mismo correo
+  update perfiles set auth_id = uid where lower(correo) = v_correo and demo and auth_id is null returning id into v;
+  if v is not null then return cp_cuenta_json(v); end if;
+
+  if length(trim(coalesce(p_nombre, ''))) < 3 or position(' ' in trim(p_nombre)) = 0 then raise exception 'Escribe tu nombre y apellido'; end if;
+  if coalesce(p_documento, '') !~ '^[0-9.]{6,15}$' then raise exception 'Número de documento no válido'; end if;
+  if length(regexp_replace(coalesce(p_celular, ''), '\D', '', 'g')) <> 10 then raise exception 'El celular debe tener 10 dígitos'; end if;
+  if not exists (select 1 from municipios where codigo = p_municipio and departamento = p_departamento) then
+    raise exception 'Selecciona un departamento y un municipio válidos'; end if;
+  if exists (select 1 from perfiles where documento = p_documento) then raise exception 'Ya existe una cuenta con ese número de documento'; end if;
+
+  insert into perfiles (auth_id, nombre, documento, celular, correo, departamento, municipio, verificado, puntos)
+  values (uid, trim(p_nombre), p_documento, p_celular, v_correo, p_departamento, p_municipio, true, 100)
+  returning id into v;
+  perform cp_notificar(v, 'info', '¡Bienvenido a ConectaPRO! Tu identidad fue verificada. Ganaste 100 puntos de bienvenida.', '/perfil/beneficios');
+  return cp_cuenta_json(v);
+end $$;
+
+create or replace function api_set_modo(p_modo text) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if p_modo not in ('cliente', 'proveedor') then raise exception 'Modo no válido'; end if;
+  if p_modo = 'proveedor' and cp_mi_proveedor(yo) is null then raise exception 'Primero configura tu perfil de proveedor'; end if;
+  update perfiles set rol_activo = p_modo where id = yo;
+end $$;
+
+create or replace function api_actualizar_perfil(p_datos jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if p_datos ? 'name' and length(trim(p_datos->>'name')) < 3 then raise exception 'El nombre es muy corto'; end if;
+  if p_datos ? 'phone' and length(regexp_replace(p_datos->>'phone', '\D', '', 'g')) <> 10 then raise exception 'El celular debe tener 10 dígitos'; end if;
+  if p_datos ? 'municipio' and not exists (select 1 from municipios where codigo = p_datos->>'municipio' and departamento = p_datos->>'departamento') then
+    raise exception 'Selecciona un departamento y un municipio válidos'; end if;
+  if p_datos ? 'photo' and length(coalesce(p_datos->>'photo', '')) > 600000 then raise exception 'La foto es demasiado grande'; end if;
+  update perfiles set
+    nombre = coalesce(trim(p_datos->>'name'), nombre),
+    celular = coalesce(p_datos->>'phone', celular),
+    departamento = coalesce(p_datos->>'departamento', departamento),
+    municipio = coalesce(p_datos->>'municipio', municipio),
+    foto = case when p_datos ? 'photo' then p_datos->>'photo' else foto end
+  where id = yo;
+  return cp_cuenta_json(yo);
+end $$;
+
+create or replace function api_preferencias(p_push boolean, p_email boolean, p_ia boolean) returns void
+language sql security definer set search_path = public as $$
+  update perfiles set notif_push = p_push, notif_email = p_email, notif_ia = p_ia where id = cp_req()
+$$;
+
+-- Elimina la cuenta y todos sus datos
+create or replace function api_eliminar_cuenta() returns void
+language plpgsql security definer set search_path = public, auth as $$
+declare yo uuid := cp_req(); uid uuid := auth.uid();
+begin
+  delete from perfiles where id = yo;
+  begin
+    delete from auth.users where id = uid;
+  exception when insufficient_privilege then
+    null;  -- si no hay permiso sobre auth.users, al menos se borran todos los datos del perfil
+  end;
+end $$;
+
+-- =====================================================================
+--  ESTADO COMPLETO DEL USUARIO (lo que la app necesita para pintar)
+-- =====================================================================
+create or replace function api_estado() returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo);
+  pv record; mis jsonb; ops jsonb; trab jsonb; convs jsonb; provs jsonb; clis jsonb;
+begin
+  select * into pv from proveedores where id = prov;
+
+  select coalesce(jsonb_agg(cp_solicitud_json(id) order by creado desc), '[]'::jsonb) into mis
+  from solicitudes where cliente_id = yo;
+
+  if prov is not null then
+    select coalesce(jsonb_agg(jsonb_build_object('r', cp_solicitud_json(s.id), 'distance', round(cp_dist(pv.lat, pv.lng, s.lat, s.lng)::numeric, 2)) order by s.creado desc), '[]'::jsonb)
+    into ops
+    from solicitudes s
+    where s.estado = 'buscando' and s.cliente_id <> yo
+      and s.servicio_id in (select servicio_id from proveedor_servicios where proveedor_id = prov)
+      and cp_dist(pv.lat, pv.lng, s.lat, s.lng) <= pv.cobertura_km
+      and not exists (select 1 from descartes d where d.solicitud_id = s.id and d.proveedor_id = prov);
+
+    select coalesce(jsonb_agg(cp_solicitud_json(id) order by creado desc), '[]'::jsonb) into trab
+    from solicitudes where proveedor_id = prov;
+  end if;
+
+  -- Proveedores mencionados en mis solicitudes
+  select coalesce(jsonb_object_agg(x.pid, cp_proveedor_json(x.pid)), '{}'::jsonb) into provs from (
+    select proveedor_id as pid from solicitudes where cliente_id = yo and proveedor_id is not null
+    union select po.proveedor_id from postulaciones po join solicitudes s on s.id = po.solicitud_id where s.cliente_id = yo
+    union select prov where prov is not null
+  ) x where x.pid is not null;
+
+  -- Clientes mencionados (oportunidades, trabajos, conversaciones)
+  select coalesce(jsonb_object_agg(x.cid, cp_cliente_json(x.cid)), '{}'::jsonb) into clis from (
+    select s.cliente_id as cid from solicitudes s where prov is not null and (s.proveedor_id = prov or s.estado = 'buscando')
+    union select case when c.usuario_a = yo then c.usuario_b else c.usuario_a end from conversaciones c where yo in (c.usuario_a, c.usuario_b)
+  ) x;
+
+  select coalesce(jsonb_agg(conv order by ult desc nulls last), '[]'::jsonb) into convs from (
+    select jsonb_build_object(
+      'id', c.id,
+      'peerKey', coalesce(pp.id, pe.id), 'peerUserId', pe.id, 'peerName', pe.nombre, 'peerPhoto', pe.foto,
+      'peerRole', coalesce(pp.profesion, 'Cliente'),
+      'unread', (select count(*) from mensajes m where m.conversacion_id = c.id and m.autor_id is distinct from yo
+                 and m.creado > coalesce((select leido_hasta from lecturas l where l.conversacion_id = c.id and l.perfil_id = yo), 'epoch'::timestamptz)),
+      'messages', coalesce((select jsonb_agg(jsonb_build_object('id', m.id,
+                    'from', case when m.autor_id is null then 'system' when m.autor_id = yo then 'me' else 'peer' end,
+                    'text', m.texto, 'image', m.imagen, 'at', cp_ms(m.creado)) order by m.creado)
+                  from (select * from mensajes where conversacion_id = c.id order by creado desc limit 100) m), '[]'::jsonb)) as conv,
+      (select max(creado) from mensajes where conversacion_id = c.id) as ult
+    from conversaciones c
+    join perfiles pe on pe.id = case when c.usuario_a = yo then c.usuario_b else c.usuario_a end
+    left join proveedores pp on pp.perfil_id = pe.id
+    where yo in (c.usuario_a, c.usuario_b)
+  ) z;
+
+  return jsonb_build_object(
+    'cuenta', cp_cuenta_json(yo),
+    'modo', (select rol_activo from perfiles where id = yo),
+    'puntos', (select puntos from perfiles where id = yo),
+    'faltas', cp_faltas(yo),
+    'prefs', (select jsonb_build_object('push', notif_push, 'email', notif_email, 'ia', notif_ia) from perfiles where id = yo),
+    'proveedor', case when prov is null then null else cp_proveedor_json(prov) end,
+    'solicitudes', mis,
+    'oportunidades', coalesce(ops, '[]'::jsonb),
+    'trabajos', coalesce(trab, '[]'::jsonb),
+    'proveedores', provs,
+    'clientes', clis,
+    'conversaciones', convs,
+    'notificaciones', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'kind', tipo, 'text', texto, 'link', enlace, 'read', leida, 'at', cp_ms(creado)) order by creado desc)
+                       from (select * from notificaciones where perfil_id = yo order by creado desc limit 60) n), '[]'::jsonb),
+    'direcciones', coalesce((select jsonb_agg(jsonb_build_object('id', di.id, 'name', di.nombre, 'address', di.direccion,
+                       'departamento', di.departamento, 'municipio', di.municipio, 'label', cp_lugar(m.nombre, d.nombre)) order by di.creado)
+                       from direcciones di join municipios m on m.codigo = di.municipio join departamentos d on d.codigo = di.departamento
+                       where di.perfil_id = yo), '[]'::jsonb),
+    'metodosPago', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'type', tipo, 'detail', detalle, 'default', predeterminado) order by creado)
+                       from metodos_pago where perfil_id = yo), '[]'::jsonb),
+    'misTrueques', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'offers', ofrece, 'needs', necesita, 'note', nota) order by creado desc)
+                       from trueque_ofertas where perfil_id = yo and activo), '[]'::jsonb),
+    'serverTime', cp_ms(now()));
+end $$;
+
+-- =====================================================================
+--  PROVEEDOR: parametrización del oferente
+-- =====================================================================
+create or replace function api_guardar_proveedor(p_datos jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); pid uuid; v_lat double precision; v_lng double precision; s text; img text; i int := 0;
+  v_dias int[]; v_desde int; v_hasta int;
+begin
+  if length(trim(coalesce(p_datos->>'company', ''))) < 2 then raise exception 'Escribe el nombre de tu empresa, emprendimiento o marca'; end if;
+  if jsonb_array_length(coalesce(p_datos->'services', '[]'::jsonb)) = 0 then raise exception 'Selecciona al menos una categoría de servicio'; end if;
+  select lat, lng into v_lat, v_lng from municipios where codigo = p_datos->>'municipio' and departamento = p_datos->>'departamento';
+  if not found then raise exception 'Selecciona el departamento y municipio base'; end if;
+  select coalesce(array_agg(x::int order by x::int), '{}') into v_dias from jsonb_array_elements_text(coalesce(p_datos->'days', '[]'::jsonb)) x;
+  if cardinality(v_dias) = 0 then raise exception 'Selecciona los días de atención'; end if;
+  v_desde := (p_datos->>'from')::int; v_hasta := (p_datos->>'to')::int;
+  if v_hasta <= v_desde then raise exception 'La hora de cierre debe ser posterior a la de apertura'; end if;
+  if length(trim(coalesce(p_datos->>'about', ''))) < 15 then raise exception 'Describe lo que haces (mínimo 15 caracteres)'; end if;
+  if (p_datos->>'priceMax')::int < (p_datos->>'priceMin')::int then raise exception 'El precio máximo debe ser mayor o igual al mínimo'; end if;
+
+  pid := cp_mi_proveedor(yo);
+  if pid is null then
+    insert into proveedores (perfil_id, empresa, profesion, departamento, municipio, lat, lng, cobertura_km, dias, hora_desde, hora_hasta,
+                             precio_min, precio_max, descripcion, ofrece, telefono, calificacion, num_resenas)
+    values (yo, trim(p_datos->>'company'), coalesce(nullif(trim(p_datos->>'profession'), ''), 'Proveedor'),
+            p_datos->>'departamento', p_datos->>'municipio', v_lat, v_lng, (p_datos->>'coverageKm')::int, v_dias, v_desde, v_hasta,
+            (p_datos->>'priceMin')::int, (p_datos->>'priceMax')::int, trim(p_datos->>'about'),
+            array(select jsonb_array_elements_text(coalesce(p_datos->'offers', '[]'::jsonb))),
+            (select celular from perfiles where id = yo), 5.0, 0)
+    returning id into pid;
+  else
+    update proveedores set empresa = trim(p_datos->>'company'),
+      profesion = coalesce(nullif(trim(p_datos->>'profession'), ''), profesion),
+      departamento = p_datos->>'departamento', municipio = p_datos->>'municipio',
+      lat = case when municipio = p_datos->>'municipio' then lat else v_lat end,
+      lng = case when municipio = p_datos->>'municipio' then lng else v_lng end,
+      cobertura_km = (p_datos->>'coverageKm')::int, dias = v_dias, hora_desde = v_desde, hora_hasta = v_hasta,
+      precio_min = (p_datos->>'priceMin')::int, precio_max = (p_datos->>'priceMax')::int, descripcion = trim(p_datos->>'about'),
+      ofrece = array(select jsonb_array_elements_text(coalesce(p_datos->'offers', '[]'::jsonb)))
+    where id = pid;
+  end if;
+
+  delete from proveedor_servicios where proveedor_id = pid;
+  for s in select jsonb_array_elements_text(p_datos->'services') loop
+    if not exists (select 1 from servicios where id = s) then raise exception 'Servicio no válido: %', s; end if;
+    insert into proveedor_servicios values (pid, s);
+  end loop;
+
+  if p_datos ? 'portfolio' then
+    delete from portafolio where proveedor_id = pid;
+    for img in select jsonb_array_elements_text(p_datos->'portfolio') loop
+      if length(img) > 600000 then raise exception 'Una de las fotos es demasiado grande'; end if;
+      insert into portafolio (proveedor_id, imagen, orden) values (pid, img, i);
+      i := i + 1;
+      exit when i >= 8;
+    end loop;
+  end if;
+
+  update perfiles set rol_activo = 'proveedor' where id = yo;
+  return cp_proveedor_json(pid);
+end $$;
+
+-- =====================================================================
+--  CLIENTE: publicar solicitud (orquestación + emparejamiento)
+-- =====================================================================
+create or replace function api_publicar(
+  p_descripcion text, p_servicio text, p_departamento text, p_municipio text,
+  p_lat double precision default null, p_lng double precision default null,
+  p_direccion text default '', p_pago text default 'efectivo', p_propuestas boolean default true)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  yo uuid := cp_req(); v_id uuid; v_lat double precision; v_lng double precision; v_titulo text; v_serv text;
+  tr jsonb; n int := 0; r record; i int := 0; auto boolean;
+begin
+  perform cp_no_suspendido(yo);
+  if length(trim(coalesce(p_descripcion, ''))) < 10 then raise exception 'Describe tu necesidad (mínimo 10 caracteres)'; end if;
+  if length(p_descripcion) > 500 then raise exception 'La descripción no puede superar 500 caracteres'; end if;
+  select nombre into v_serv from servicios where id = p_servicio;
+  if v_serv is null then raise exception 'Selecciona una categoría de servicio válida'; end if;
+  select lat, lng into v_lat, v_lng from municipios where codigo = p_municipio and departamento = p_departamento;
+  if not found then raise exception 'Selecciona un departamento y un municipio válidos'; end if;
+  -- Si el GPS está dentro del municipio elegido, se usa la ubicación exacta
+  if p_lat is not null and p_lng is not null and cp_dist(p_lat, p_lng, v_lat, v_lng) < 25 then v_lat := p_lat; v_lng := p_lng; end if;
+  if p_pago not in ('efectivo', 'nequi', 'transferencia', 'tarjeta') then raise exception 'Método de pago no válido'; end if;
+
+  v_titulo := left(trim(regexp_replace(trim(p_descripcion), '[.,\n].*$', '')), 48);
+  if v_titulo = '' then v_titulo := v_serv; end if;
+
+  tr := jsonb_build_object(
+    'total', (select count(*) from proveedores where activo),
+    'byCategory', (select count(*) from proveedor_servicios ps join proveedores p on p.id = ps.proveedor_id
+                   where p.activo and ps.servicio_id = p_servicio and p.perfil_id <> yo),
+    'byCoverage', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo)),
+    'bySchedule', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo) where disponibilidad <> 'otro'));
+
+  insert into solicitudes (cliente_id, titulo, descripcion, servicio_id, departamento, municipio, lat, lng, direccion,
+                           metodo_pago, recibir_propuestas, foto, traza)
+  values (yo, v_titulo, trim(p_descripcion), p_servicio, p_departamento, p_municipio, v_lat, v_lng, coalesce(trim(p_direccion), ''),
+          p_pago, p_propuestas, (select foto from servicios where id = p_servicio), tr)
+  returning id into v_id;
+
+  select coalesce((select valor = 'true' from config where clave = 'auto_respuesta_demo'), true) into auto;
+
+  for r in
+    select m.proveedor_id, m.perfil_id, m.distancia, p.precio_min, p.precio_max, pe.auth_id, pe.demo
+    from cp_match(p_servicio, v_lat, v_lng, yo) m
+    join proveedores p on p.id = m.proveedor_id join perfiles pe on pe.id = m.perfil_id
+  loop
+    insert into solicitud_notificados values (v_id, r.proveedor_id, round(r.distancia::numeric, 2));
+    perform cp_notificar(r.perfil_id, 'match',
+      format('Nueva oportunidad de %s a %s km: "%s"', lower(v_serv), round(r.distancia::numeric, 1), v_titulo), '/oportunidad/' || v_id);
+    n := n + 1;
+    -- Proveedores de ejemplo (sin cuenta de acceso) responden solos para que la plataforma se pueda probar
+    if auto and r.demo and r.auth_id is null and i < 3 then
+      insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde)
+      values (v_id, r.proveedor_id, greatest(5000, round((r.precio_min + r.precio_max) / 2.0 / 5000) * 5000), now() + make_interval(secs => 4 + i * 3));
+      i := i + 1;
+    end if;
+  end loop;
+
+  perform cp_notificar(yo, 'match', format('Notificamos a %s proveedores compatibles para "%s"', n, v_titulo), '/buscando/' || v_id);
+  return jsonb_build_object('id', v_id, 'notificados', n, 'trace', tr);
+end $$;
+
+create or replace function api_editar_solicitud(p_id uuid, p_descripcion text, p_pago text, p_direccion text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if length(trim(coalesce(p_descripcion, ''))) < 10 then raise exception 'Describe tu necesidad (mínimo 10 caracteres)'; end if;
+  if p_pago not in ('efectivo', 'nequi', 'transferencia', 'tarjeta') then raise exception 'Método de pago no válido'; end if;
+  update solicitudes set descripcion = trim(p_descripcion), metodo_pago = p_pago,
+         direccion = coalesce(trim(p_direccion), direccion),
+         titulo = coalesce(nullif(left(trim(regexp_replace(trim(p_descripcion), '[.,\n].*$', '')), 48), ''), titulo)
+  where id = p_id and cliente_id = yo and estado = 'buscando';
+  if not found then raise exception 'Solo puedes editar tus solicitudes que aún buscan proveedor'; end if;
+  return cp_solicitud_json(p_id);
+end $$;
+
+create or replace function api_eliminar_solicitud(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  delete from solicitudes where id = p_id and cliente_id = yo and estado in ('buscando', 'cancelada');
+  if not found then raise exception 'Solo puedes eliminar solicitudes que buscan proveedor o están canceladas'; end if;
+end $$;
+
+-- =====================================================================
+--  PROVEEDOR: postularse / descartar
+-- =====================================================================
+create or replace function api_postular(p_solicitud uuid, p_precio int, p_nota text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); s solicitudes; v_nombre text;
+begin
+  if prov is null then raise exception 'Primero configura tu perfil de proveedor'; end if;
+  perform cp_no_suspendido(yo);
+  select * into s from solicitudes where id = p_solicitud;
+  if s.id is null then raise exception 'La solicitud no existe'; end if;
+  if s.cliente_id = yo then raise exception 'No puedes postularte a tu propia solicitud'; end if;
+  if s.estado <> 'buscando' then raise exception 'Esta solicitud ya fue asignada'; end if;
+  if not exists (select 1 from proveedor_servicios where proveedor_id = prov and servicio_id = s.servicio_id) then
+    raise exception 'Esta solicitud no corresponde a tus categorías'; end if;
+  if coalesce(p_precio, 0) < 5000 then raise exception 'El precio mínimo es $5.000'; end if;
+  insert into postulaciones (solicitud_id, proveedor_id, precio, nota) values (p_solicitud, prov, p_precio, nullif(trim(coalesce(p_nota, '')), ''))
+  on conflict (solicitud_id, proveedor_id) do update set precio = excluded.precio, nota = excluded.nota;
+  select nombre into v_nombre from perfiles where id = yo;
+  perform cp_notificar(s.cliente_id, 'match', format('%s aceptó tu solicitud "%s"', v_nombre, s.titulo), '/proveedores/' || s.id);
+  return cp_solicitud_json(p_solicitud);
+end $$;
+
+create or replace function api_descartar(p_solicitud uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare prov uuid := cp_mi_proveedor(cp_req());
+begin
+  if prov is null then raise exception 'Primero configura tu perfil de proveedor'; end if;
+  insert into descartes values (p_solicitud, prov) on conflict do nothing;
+end $$;
+
+-- =====================================================================
+--  ACUERDO DIGITAL
+-- =====================================================================
+create or replace function cp_conversacion(a uuid, b uuid) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare v uuid; x uuid := least(a, b); y uuid := greatest(a, b);
+begin
+  if a = b then raise exception 'No puedes escribirte a ti mismo'; end if;
+  select id into v from conversaciones where usuario_a = x and usuario_b = y;
+  if v is null then
+    insert into conversaciones (usuario_a, usuario_b) values (x, y) on conflict do nothing returning id into v;
+    if v is null then select id into v from conversaciones where usuario_a = x and usuario_b = y; end if;
+  end if;
+  return v;
+end $$;
+
+create or replace function api_confirmar_acuerdo(p_solicitud uuid, p_proveedor uuid, p_fecha date, p_hora text, p_precio int) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); s solicitudes; v_codigo text; v_prov_perfil uuid; v_prov_nombre text; v_conv uuid;
+begin
+  select * into s from solicitudes where id = p_solicitud for update;
+  if s.id is null or s.cliente_id <> yo then raise exception 'Solicitud no encontrada'; end if;
+  if s.estado <> 'buscando' then raise exception 'Esta solicitud ya tiene un acuerdo'; end if;
+  if not exists (select 1 from postulaciones where solicitud_id = p_solicitud and proveedor_id = p_proveedor and visible_desde <= now()) then
+    raise exception 'Este proveedor no se ha postulado a tu solicitud'; end if;
+  if p_fecha < (now() at time zone 'America/Bogota')::date then raise exception 'La fecha no puede ser anterior a hoy'; end if;
+
+  v_codigo := 'CP-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('acuerdo_seq')::text, 4, '0');
+  insert into acuerdos (solicitud_id, codigo, fecha, hora, precio) values (p_solicitud, v_codigo, p_fecha, p_hora::time, p_precio);
+  update solicitudes set estado = 'en_curso', proveedor_id = p_proveedor where id = p_solicitud;
+
+  select p.perfil_id, pe.nombre into v_prov_perfil, v_prov_nombre from proveedores p join perfiles pe on pe.id = p.perfil_id where p.id = p_proveedor;
+  perform cp_notificar(yo, 'agreement', format('Acuerdo digital %s confirmado con %s', v_codigo, v_prov_nombre), '/solicitud/' || p_solicitud);
+  perform cp_notificar(v_prov_perfil, 'agreement', format('¡Te eligieron! Nuevo acuerdo %s: "%s"', v_codigo, s.titulo), '/trabajo/' || p_solicitud);
+  v_conv := cp_conversacion(yo, v_prov_perfil);
+  insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null, format('Acuerdo %s confirmado · %s', v_codigo, s.titulo));
+  return cp_solicitud_json(p_solicitud) || jsonb_build_object('conversationId', v_conv);
+end $$;
+
+-- =====================================================================
+--  CALIFICACIÓN MUTUA
+-- =====================================================================
+create or replace function api_calificar(p_solicitud uuid, p_estrellas int, p_comentario text default '') returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); s solicitudes; v_prov_perfil uuid; v_rol text; ya_completa boolean;
+begin
+  select * into s from solicitudes where id = p_solicitud for update;
+  if s.id is null or s.proveedor_id is null then raise exception 'Solicitud no encontrada'; end if;
+  if s.estado not in ('en_curso', 'completada') then raise exception 'Este servicio no se puede calificar'; end if;
+  if p_estrellas not between 1 and 5 then raise exception 'Elige de 1 a 5 estrellas'; end if;
+  select perfil_id into v_prov_perfil from proveedores where id = s.proveedor_id;
+  if yo = s.cliente_id then v_rol := 'cliente';
+  elsif yo = v_prov_perfil then v_rol := 'proveedor';
+  else raise exception 'No participaste en este servicio'; end if;
+  if exists (select 1 from calificaciones where solicitud_id = p_solicitud and rol_autor = v_rol) then
+    raise exception 'Ya calificaste este servicio'; end if;
+
+  insert into calificaciones (solicitud_id, autor_id, rol_autor, estrellas, comentario)
+  values (p_solicitud, yo, v_rol, p_estrellas, left(coalesce(trim(p_comentario), ''), 200));
+
+  ya_completa := s.estado = 'completada';
+  update solicitudes set estado = 'completada', finalizado = coalesce(finalizado, now()) where id = p_solicitud;
+  update perfiles set puntos = puntos + 50 where id = yo;
+
+  if v_rol = 'cliente' then
+    update proveedores set calificacion = round(((calificacion * num_resenas + p_estrellas) / (num_resenas + 1))::numeric, 1),
+           num_resenas = num_resenas + 1, completados = completados + case when ya_completa then 0 else 1 end
+    where id = s.proveedor_id;
+    perform cp_notificar(v_prov_perfil, 'rating', format('Recibiste una calificación de %s estrellas por "%s"', p_estrellas, s.titulo), '/trabajo/' || s.id);
+  else
+    update perfiles set calificacion = round(((calificacion * num_resenas + p_estrellas) / (num_resenas + 1))::numeric, 1),
+           num_resenas = num_resenas + 1 where id = s.cliente_id;
+    if not ya_completa then update proveedores set completados = completados + 1 where id = s.proveedor_id; end if;
+    perform cp_notificar(s.cliente_id, 'rating', format('El proveedor marcó "%s" como realizado. ¡Califícalo!', s.titulo), '/calificar/' || s.id);
+  end if;
+  perform cp_notificar(yo, 'rating', '¡Ganaste 50 puntos ConectaPRO por calificar!', '/perfil/beneficios');
+  return cp_solicitud_json(p_solicitud);
+end $$;
+
+-- =====================================================================
+--  FLEXIBILIDAD, CANCELACIONES Y REGLA DE "TRES STRIKES"
+-- =====================================================================
+create or replace function api_extender_plazo(p_solicitud uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); s solicitudes; v_prov_perfil uuid;
+begin
+  select * into s from solicitudes where id = p_solicitud and cliente_id = yo and estado = 'en_curso';
+  if s.id is null then raise exception 'Solicitud no encontrada o no está en curso'; end if;
+  if s.penalizacion_puntualidad then raise exception 'Ya otorgaste un plazo adicional'; end if;
+  update acuerdos set plazo_extra_dias = 2 where solicitud_id = p_solicitud;
+  update solicitudes set penalizacion_puntualidad = true where id = p_solicitud;
+  select perfil_id into v_prov_perfil from proveedores where id = s.proveedor_id;
+  update proveedores set calificacion = greatest(1, calificacion - 0.1) where id = s.proveedor_id;
+  perform cp_notificar(v_prov_perfil, 'strike', format('Se registró un incumplimiento de puntualidad en "%s". Tienes 2 días adicionales.', s.titulo), '/trabajo/' || s.id);
+  return cp_solicitud_json(p_solicitud);
+end $$;
+
+create or replace function api_cancelar(p_solicitud uuid, p_con_falta boolean default false) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); s solicitudes; v_prov_perfil uuid; n int;
+begin
+  select * into s from solicitudes where id = p_solicitud and cliente_id = yo;
+  if s.id is null then raise exception 'Solicitud no encontrada'; end if;
+  if s.estado not in ('buscando', 'en_curso') then raise exception 'Esta solicitud ya terminó'; end if;
+  update solicitudes set estado = 'cancelada', finalizado = now() where id = p_solicitud;
+  if s.estado = 'en_curso' then
+    select perfil_id into v_prov_perfil from proveedores where id = s.proveedor_id;
+    perform cp_notificar(v_prov_perfil, 'info', format('El cliente canceló el acuerdo de "%s"', s.titulo), '/trabajo/' || s.id);
+    if p_con_falta then
+      insert into faltas (perfil_id, solicitud_id, motivo) values (yo, p_solicitud, 'Cancelación de un acuerdo confirmado');
+      n := cp_faltas(yo);
+      perform cp_notificar(yo, 'strike', format('Se registró una falta grave (%s/3). Al llegar a 3 tu cuenta será suspendida.', n), '/perfil/seguridad');
+    end if;
+  end if;
+  return cp_solicitud_json(p_solicitud);
+end $$;
+
+create or replace function api_no_asistir(p_solicitud uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); s solicitudes; n int;
+begin
+  select * into s from solicitudes where id = p_solicitud and proveedor_id = prov and estado = 'en_curso';
+  if s.id is null then raise exception 'Trabajo no encontrado o no está en curso'; end if;
+  update solicitudes set estado = 'cancelada', finalizado = now() where id = p_solicitud;
+  insert into faltas (perfil_id, solicitud_id, motivo) values (yo, p_solicitud, 'No realizó un trabajo acordado');
+  n := cp_faltas(yo);
+  perform cp_notificar(yo, 'strike', format('Se registró una falta grave por no realizar un trabajo acordado (%s/3).', n), '/perfil/seguridad');
+  perform cp_notificar(s.cliente_id, 'info', format('El proveedor canceló "%s". Puedes volver a publicar tu solicitud.', s.titulo), '/solicitud/' || s.id);
+  return cp_solicitud_json(p_solicitud);
+end $$;
+
+-- =====================================================================
+--  MENSAJERÍA Y NOTIFICACIONES
+-- =====================================================================
+create or replace function api_abrir_conversacion(p_perfil uuid default null, p_proveedor uuid default null) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); otro uuid := p_perfil;
+begin
+  if otro is null and p_proveedor is not null then select perfil_id into otro from proveedores where id = p_proveedor; end if;
+  if otro is null or not exists (select 1 from perfiles where id = otro) then raise exception 'Usuario no encontrado'; end if;
+  return cp_conversacion(yo, otro);
+end $$;
+
+create or replace function api_enviar_mensaje(p_conversacion uuid, p_texto text default null, p_imagen text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); c conversaciones; otro uuid; v_id uuid; v_nombre text;
+begin
+  select * into c from conversaciones where id = p_conversacion and yo in (usuario_a, usuario_b);
+  if c.id is null then raise exception 'Conversación no encontrada'; end if;
+  if coalesce(trim(p_texto), '') = '' and p_imagen is null then raise exception 'El mensaje está vacío'; end if;
+  if length(coalesce(p_texto, '')) > 2000 then raise exception 'El mensaje es demasiado largo'; end if;
+  if length(coalesce(p_imagen, '')) > 600000 then raise exception 'La imagen es demasiado grande'; end if;
+  insert into mensajes (conversacion_id, autor_id, texto, imagen) values (p_conversacion, yo, nullif(trim(p_texto), ''), p_imagen) returning id into v_id;
+  insert into lecturas values (p_conversacion, yo, now()) on conflict (conversacion_id, perfil_id) do update set leido_hasta = now();
+  otro := case when c.usuario_a = yo then c.usuario_b else c.usuario_a end;
+  select nombre into v_nombre from perfiles where id = yo;
+  perform cp_notificar(otro, 'message', format('%s: %s', split_part(v_nombre, ' ', 1), coalesce(left(nullif(trim(p_texto), ''), 80), '📷 Foto')), '/chat/' || p_conversacion);
+  return jsonb_build_object('id', v_id);
+end $$;
+
+create or replace function api_leer_conversacion(p_conversacion uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if not exists (select 1 from conversaciones where id = p_conversacion and yo in (usuario_a, usuario_b)) then return; end if;
+  insert into lecturas values (p_conversacion, yo, now()) on conflict (conversacion_id, perfil_id) do update set leido_hasta = now();
+  update notificaciones set leida = true where perfil_id = yo and enlace = '/chat/' || p_conversacion and not leida;
+end $$;
+
+create or replace function api_leer_notificaciones() returns void
+language sql security definer set search_path = public as $$
+  update notificaciones set leida = true where perfil_id = cp_req() and not leida
+$$;
+
+-- =====================================================================
+--  DIRECCIONES Y MÉTODOS DE PAGO (CRUD)
+-- =====================================================================
+create or replace function api_direccion_guardar(p_id uuid, p_nombre text, p_direccion text, p_departamento text, p_municipio text) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if length(trim(coalesce(p_nombre, ''))) < 2 or length(trim(coalesce(p_direccion, ''))) < 4 then raise exception 'Escribe el nombre y la dirección'; end if;
+  if not exists (select 1 from municipios where codigo = p_municipio and departamento = p_departamento) then raise exception 'Selecciona un departamento y un municipio válidos'; end if;
+  if p_id is null then
+    insert into direcciones (perfil_id, nombre, direccion, departamento, municipio) values (yo, trim(p_nombre), trim(p_direccion), p_departamento, p_municipio);
+  else
+    update direcciones set nombre = trim(p_nombre), direccion = trim(p_direccion), departamento = p_departamento, municipio = p_municipio
+    where id = p_id and perfil_id = yo;
+    if not found then raise exception 'Dirección no encontrada'; end if;
+  end if;
+end $$;
+
+create or replace function api_direccion_eliminar(p_id uuid) returns void
+language sql security definer set search_path = public as $$
+  delete from direcciones where id = p_id and perfil_id = cp_req()
+$$;
+
+create or replace function api_pago_guardar(p_tipo text, p_detalle text) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if p_tipo not in ('efectivo', 'nequi', 'transferencia', 'tarjeta') then raise exception 'Método de pago no válido'; end if;
+  insert into metodos_pago (perfil_id, tipo, detalle, predeterminado)
+  values (yo, p_tipo, coalesce(trim(p_detalle), ''), not exists (select 1 from metodos_pago where perfil_id = yo));
+end $$;
+
+create or replace function api_pago_predeterminado(p_id uuid) returns void
+language sql security definer set search_path = public as $$
+  update metodos_pago set predeterminado = (id = p_id) where perfil_id = cp_req()
+$$;
+
+create or replace function api_pago_eliminar(p_id uuid) returns void
+language sql security definer set search_path = public as $$
+  delete from metodos_pago where id = p_id and perfil_id = cp_req()
+$$;
+
+-- =====================================================================
+--  TRUEQUE
+-- =====================================================================
+create or replace function api_trueque_buscar(p_ofrece text, p_necesita text, p_departamento text default null) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', t.id, 'userId', pe.id, 'name', pe.nombre, 'photo', pe.foto, 'offers', t.ofrece, 'needs', t.necesita, 'note', t.nota,
+      'city', cp_lugar(m.nombre, d.nombre), 'perfect', (t.ofrece = p_necesita and t.necesita = p_ofrece))
+    order by (t.ofrece = p_necesita and t.necesita = p_ofrece) desc, t.creado desc), '[]'::jsonb)
+  from trueque_ofertas t join perfiles pe on pe.id = t.perfil_id
+  left join municipios m on m.codigo = pe.municipio left join departamentos d on d.codigo = pe.departamento
+  where t.activo and pe.id is distinct from cp_yo()
+    and (t.ofrece = p_necesita or t.necesita = p_ofrece)
+    and (nullif(p_departamento, '') is null or pe.departamento = p_departamento)
+$$;
+
+create or replace function api_trueque_publicar(p_ofrece text, p_necesita text, p_nota text) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if p_ofrece = p_necesita then raise exception 'Lo que ofreces y lo que necesitas deben ser distintos'; end if;
+  if length(trim(coalesce(p_nota, ''))) < 5 then raise exception 'Escribe una nota corta de tu propuesta'; end if;
+  insert into trueque_ofertas (perfil_id, ofrece, necesita, nota) values (yo, p_ofrece, p_necesita, trim(p_nota));
+end $$;
+
+create or replace function api_trueque_eliminar(p_id uuid) returns void
+language sql security definer set search_path = public as $$
+  delete from trueque_ofertas where id = p_id and perfil_id = cp_req()
+$$;
+
+-- =====================================================================
+--  FIDELIZACIÓN
+-- =====================================================================
+create or replace function api_canjear(p_aliado int) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); a aliados; v_codigo text;
+begin
+  select * into a from aliados where id = p_aliado;
+  if a.id is null then raise exception 'Beneficio no encontrado'; end if;
+  update perfiles set puntos = puntos - a.costo where id = yo and puntos >= a.costo;
+  if not found then raise exception 'No tienes puntos suficientes'; end if;
+  v_codigo := 'CP-' || upper(substr(md5(random()::text), 1, 6));
+  insert into canjes (perfil_id, aliado_id, codigo) values (yo, p_aliado, v_codigo);
+  return jsonb_build_object('code', v_codigo, 'brand', a.marca);
+end $$;
+
+-- =====================================================================
+--  Permisos de ejecución de la API
+-- =====================================================================
+revoke execute on all functions in schema public from public, anon, authenticated;
+grant execute on function
+  api_catalogo(), api_departamentos(), api_municipios(text), api_municipio_cercano(double precision, double precision),
+  api_aliados(), api_demo_cuentas(), api_buscar_proveedores(text, text, text, text, boolean, text), api_proveedor(uuid),
+  api_vista_previa(text, text), api_trueque_buscar(text, text, text)
+to anon, authenticated;
+grant execute on function
+  api_completar_registro(text, text, text, text, text), api_set_modo(text), api_actualizar_perfil(jsonb),
+  api_preferencias(boolean, boolean, boolean), api_eliminar_cuenta(), api_estado(), api_guardar_proveedor(jsonb),
+  api_publicar(text, text, text, text, double precision, double precision, text, text, boolean),
+  api_editar_solicitud(uuid, text, text, text), api_eliminar_solicitud(uuid), api_postular(uuid, int, text), api_descartar(uuid),
+  api_confirmar_acuerdo(uuid, uuid, date, text, int), api_calificar(uuid, int, text), api_extender_plazo(uuid),
+  api_cancelar(uuid, boolean), api_no_asistir(uuid), api_abrir_conversacion(uuid, uuid), api_enviar_mensaje(uuid, text, text),
+  api_leer_conversacion(uuid), api_leer_notificaciones(), api_direccion_guardar(uuid, text, text, text, text),
+  api_direccion_eliminar(uuid), api_pago_guardar(text, text), api_pago_predeterminado(uuid), api_pago_eliminar(uuid),
+  api_trueque_publicar(text, text, text), api_trueque_eliminar(uuid), api_canjear(int)
+to authenticated;
+
+-- Generado por supabase/generar_seed.py — NO editar a mano.
+
+-- Departamentos y municipios de Colombia (DIVIPOLA) + catálogo + datos de ejemplo.
+
+begin;
+
+insert into departamentos (codigo, nombre, lat, lng) values
+('05','Antioquia',7.0,-75.5),
+('08','Atlántico',10.75,-75.0),
+('11','Bogotá D.C.',4.6097,-74.0817),
+('13','Bolívar',9.0,-74.3333333),
+('15','Boyacá',5.5,-72.5),
+('17','Caldas',5.25,-75.5),
+('18','Caquetá',1.0,-74.0),
+('19','Cauca',2.5,-76.8333333),
+('20','Cesar',9.3333333,-73.5),
+('23','Córdoba',8.3333333,-75.6666667),
+('25','Cundinamarca',5.0,-74.1666667),
+('27','Chocó',6.0,-77.0),
+('41','Huila',2.5,-75.75),
+('44','La Guajira',11.5,-72.5),
+('47','Magdalena',10.0,-74.5),
+('50','Meta',3.5,-73.0),
+('52','Nariño',1.5,-78.0),
+('54','Norte de Santander',8.0,-73.0),
+('63','Quindío',4.5,-75.6666667),
+('66','Risaralda',5.0,-76.0),
+('68','Santander',7.0,-73.25),
+('70','Sucre',9.0,-75.0),
+('73','Tolima',3.75,-75.25),
+('76','Valle del Cauca',3.75,-76.5),
+('81','Arauca',7.0902778,-70.7616667),
+('85','Casanare',5.5,-71.5),
+('86','Putumayo',0.5,-76.0),
+('88','Archipiélago de San Andrés, Providencia y Santa Catalina',12.5847222,-81.7005556),
+('91','Amazonas',-1.0197222,-71.9383333),
+('94','Guainía',2.5,-69.0),
+('95','Guaviare',1.6894444,-72.8202778),
+('97','Vaupés',0.25,-70.75),
+('99','Vichada',5.0,-69.5)
+on conflict (codigo) do update set nombre = excluded.nombre, lat = excluded.lat, lng = excluded.lng;
+
+insert into municipios (codigo, departamento, nombre, lat, lng) values
+('05001','05','Medellín',6.2913889,-75.5361111),
+('05002','05','Abejorral',5.75,-75.4166667),
+('05004','05','Abriaquí',6.6666667,-76.0833333),
+('05021','05','Alejandria',6.3666667,-75.0833333),
+('05030','05','Amagá',6.05,-75.7),
+('05031','05','Amalfi',7.0,-74.9166667),
+('05034','05','Andes',5.5833333,-75.9166667),
+('05036','05','Angelópolis',6.1333333,-75.7),
+('05038','05','Angostura',6.8666667,-75.3333333),
+('05040','05','Anorí',7.1666667,-75.0833333),
+('05042','05','Santa Fé de Antioquia',6.5597222,-75.8280556),
+('05044','05','Anzá',6.3333333,-75.9166667),
+('05045','05','Apartadó',7.8855556,-76.6347222),
+('05051','05','Arboletes',8.5,-76.4166667),
+('05055','05','Argelia',5.7341667,-75.1463889),
+('05059','05','Armenia',6.1666667,-75.8333333),
+('05079','05','Barbosa',6.45,-75.3333333),
+('05086','05','Belmira',6.6666667,-75.6666667),
+('05088','05','Bello',6.3388889,-75.5622222),
+('05091','05','Betania',5.75,-75.9666667),
+('05093','05','Betulia',6.2,-75.9166667),
+('05101','05','Bolívar',5.8333333,-76.0),
+('05107','05','Briceño',7.1122222,-75.5541667),
+('05113','05','Burítica',6.75,-75.9166667),
+('05120','05','Cáceres',7.6666667,-75.3333333),
+('05125','05','Caicedo',6.45,-75.9666667),
+('05129','05','Caldas',6.0833333,-75.6333333),
+('05134','05','Campamento',7.0833333,-75.25),
+('05138','05','Cañasgordas',6.75,-76.0),
+('05142','05','Caracolí',6.4119444,-74.7605556),
+('05145','05','Caramanta',5.5833333,-75.5833333),
+('05147','05','Carepa',7.7663889,-76.6611111),
+('05148','05','Carmen de Viboral',6.085,-75.3386111),
+('05150','05','Carolina',6.8,-75.25),
+('05154','05','Caucasia',7.9166667,-75.0),
+('05172','05','Chigorodó',7.6666667,-76.6666667),
+('05190','05','Cisneros',6.5833333,-75.0833333),
+('05197','05','Cocorná',6.0,-75.0),
+('05206','05','Concepción',6.4166667,-75.25),
+('05209','05','Concordia',6.0833333,-75.9166667),
+('05212','05','Copacabana',6.3333333,-75.5),
+('05234','05','Dabeiba',7.0,-76.25),
+('05237','05','Don Matías',6.5,-75.3333333),
+('05240','05','Ebéjico',6.3333333,-75.75),
+('05250','05','El Bagre',7.5941667,-74.8119444),
+('05264','05','Entrerríos',6.5833333,-75.5833333),
+('05266','05','Envigado',6.1730556,-75.5638889),
+('05282','05','Fredonia',5.9166667,-75.6666667),
+('05284','05','Frontino',6.6666667,-76.3333333),
+('05306','05','Giraldo',6.6666667,-75.9166667),
+('05308','05','Girardota',6.4166667,-75.45),
+('05310','05','Gómez Plata',6.75,-75.8333333),
+('05313','05','Granada',6.1666667,-75.1333333),
+('05315','05','Guadalupe',6.8175,-75.2441667),
+('05318','05','Guarne',6.25,-75.4166667),
+('05321','05','Guatapé',6.25,-75.1666667),
+('05347','05','Heliconia',6.2333333,-75.75),
+('05353','05','Hispania',5.8025,-75.9116667),
+('05360','05','Itagüí',6.1719444,-75.6113889),
+('05361','05','Ituango',7.25,-76.0),
+('05364','05','Jardín',5.5833333,-75.8333333),
+('05368','05','Jericó',5.75,-75.75),
+('05376','05','La Ceja',6.0,-75.4166667),
+('05380','05','La Estrella',6.1666667,-75.6666667),
+('05390','05','La Pintada',5.75,-75.6),
+('05400','05','La Unión',5.9166667,-75.3333333),
+('05411','05','Liborina',6.75,-75.75),
+('05425','05','Maceo',6.5,-74.75),
+('05440','05','Marinilla',6.2,-75.3),
+('05467','05','Montebello',5.9166667,-75.5),
+('05475','05','Murindó',6.8,-76.8),
+('05480','05','Mutatá',7.3333333,-76.5),
+('05483','05','Nariño',5.6,-75.1666667),
+('05490','05','Necoclí',8.4238889,-76.7911111),
+('05495','05','Nechí',8.0963889,-74.7758333),
+('05501','05','Olaya',6.6666667,-75.75),
+('05541','05','Peñol',6.25,-75.25),
+('05543','05','Peque',7.0,-75.8333333),
+('05576','05','Pueblorrico',5.8,-75.85),
+('05579','05','Puerto Berrío',6.4166667,-74.5),
+('05585','05','Puerto Nare',6.1916667,-74.5866667),
+('05591','05','Puerto Triunfo',5.8708333,-74.6455556),
+('05604','05','Remedios',7.0,-74.4166667),
+('05607','05','Retiro',6.0833333,-75.5),
+('05615','05','Rionegro',6.1551,-75.3737),
+('05628','05','Sabanalarga',6.9166667,-75.8),
+('05631','05','Sabaneta',6.15,-75.6),
+('05642','05','Salgar',6.0,-76.0),
+('05647','05','San Andrés de Cuerquía',6.917,-75.667),
+('05649','05','San Carlos',6.2,-74.9166667),
+('05652','05','San Francisco',6.1166667,-75.9833333),
+('05656','05','San Jerónimo',6.45,-75.7),
+('05658','05','San José de Montaña',6.8502778,-75.6833333),
+('05659','05','San Juan de Urabá',8.7630556,-76.53),
+('05660','05','San Luís',6.0,-74.8333333),
+('05664','05','San Pedro',6.45,-75.5833333),
+('05665','05','San Pedro de Urabá',8.2761111,-76.3786111),
+('05667','05','San Rafael',6.3,-75.0),
+('05670','05','San Roque',6.4166667,-74.8333333),
+('05674','05','San Vicente',6.3333333,-75.3333333),
+('05679','05','Santa Bárbara',5.8666667,-75.5833333),
+('05686','05','Santa Rosa de Osos',6.6666667,-75.4166667),
+('05690','05','Santo Domingo',6.4722222,-75.1647222),
+('05697','05','Santuario',6.1333333,-75.25),
+('05736','05','Segovia',7.25,-74.75),
+('05756','05','Sonsón',5.75,-75.0),
+('05761','05','Sopetrán',6.5,-75.75),
+('05789','05','Támesis',5.6666667,-75.6666667),
+('05790','05','Tarazá',7.5833333,-75.35),
+('05792','05','Tarso',5.8333333,-75.8333333),
+('05809','05','Titiribí',6.0833333,-75.8),
+('05819','05','Toledo',7.0,-75.7),
+('05837','05','Turbo',8.0,-76.5833333),
+('05842','05','Uramita',6.8994444,-76.1741667),
+('05847','05','Urrao',6.3333333,-76.4166667),
+('05854','05','Valdivia',7.3333333,-75.3333333),
+('05856','05','Valparaiso',5.6666667,-75.5833333),
+('05858','05','Vegachí',6.7730556,-74.8016667),
+('05861','05','Venecia',5.9166667,-75.75),
+('05873','05','Vigía del Fuerte',6.5919444,-76.8986111),
+('05885','05','Yalí',6.8333333,-74.75),
+('05887','05','Yarumal',7.0,-75.5),
+('05890','05','Yolombó',6.6666667,-75.0),
+('05893','05','Yondó (Casabe)',7.0077778,-73.9141667),
+('05895','05','Zaragoza',7.75,-74.75),
+('08001','08','Barranquilla',10.9638889,-74.7963889),
+('08078','08','Baranoa',10.8,-74.9166667),
+('08132','08','Juan de Acosta',10.8333333,-75.0333333),
+('08137','08','Campo de la Cruz',10.4166667,-74.9166667),
+('08141','08','Candelaria',10.5,-74.8333333),
+('08296','08','Galapa',10.9166667,-74.8333333),
+('08421','08','Luruaco',10.6141667,-75.1461111),
+('08433','08','Malambo',10.8588889,-74.7730556),
+('08436','08','Manatí',10.5,-75.0),
+('08520','08','Palmar de Varela',10.7466667,-74.7555556),
+('08549','08','Piojo',10.75,-75.1333333),
+('08558','08','Polonuevo',10.75,-74.7833333),
+('08560','08','Ponedera',10.6436111,-74.7544444),
+('08573','08','Puerto Colombia',11.0166667,-74.8833333),
+('08606','08','Repelón',10.55,-75.1333333),
+('08634','08','Sabanagrande',10.8,-74.75),
+('08638','08','Sabanalarga',10.6333333,-74.8333333),
+('08675','08','Santa Lucía',10.3286111,-74.9644444),
+('08685','08','Santo Tomás',10.75,-74.8333333),
+('08758','08','Soledad',10.9172222,-74.7666667),
+('08770','08','Suan',10.3333333,-74.9166667),
+('08832','08','Tubará',10.9166667,-74.95),
+('08849','08','Usiacuri',10.75,-74.9666667),
+('11001','11','Bogotá D.C.',4.6097,-74.0817),
+('13001','13','Cartagena',10.3997222,-75.5144444),
+('13006','13','Achí',8.25,-74.5),
+('13030','13','Altos del Rosario',8.7944444,-74.1658333),
+('13042','13','Arenal',8.4666667,-73.95),
+('13052','13','Arjona',10.1666667,-75.3333333),
+('13062','13','Arroyohondo',10.2497222,-75.0113889),
+('13074','13','Barranco de Loba',8.8333333,-74.1666667),
+('13140','13','Calamar',10.25,-75.0),
+('13160','13','Cantagallo',7.3791667,-73.9180556),
+('13188','13','Cicuco',9.4166667,-74.7333333),
+('13212','13','Córdoba',9.5,-74.9166667),
+('13222','13','Clemencia',10.5891667,-75.3341667),
+('13244','13','El Carmen de Bolívar',9.75,-75.1666667),
+('13248','13','El Guamo',10.0833333,-74.9166667),
+('13268','13','El Peñon',8.9833333,-73.95),
+('13300','13','Hatillo de Loba',8.9586111,-74.0808333),
+('13430','13','Magangué',9.2413889,-74.7533333),
+('13433','13','Mahates',10.1666667,-75.1666667),
+('13440','13','Margarita',9.0833333,-74.2),
+('13442','13','María la Baja',10.0,-75.3333333),
+('13458','13','Montecristo',8.2994444,-74.4755556),
+('13468','13','Mompós',9.25,-74.5833333),
+('13473','13','Morales',8.4166667,-74.0),
+('13490','13','Norosí',8.5333333,-74.0333333),
+('13549','13','Pinillos',8.9172222,-74.4663889),
+('13580','13','Regidor',8.6666667,-73.8333333),
+('13600','13','Río Viejo',8.59,-73.8436111),
+('13620','13','San Cristobal',9.8833333,-75.25),
+('13647','13','San Estanislao',10.3983333,-75.1511111),
+('13650','13','San Fernando',9.0833333,-74.3333333),
+('13654','13','San Jacinto',9.8333333,-75.0833333),
+('13655','13','San Jacinto del Cauca',9.8316667,-75.1263889),
+('13657','13','San Juan de Nepomuceno',9.9566667,-75.0866667),
+('13667','13','San Martín de Loba',8.8333333,-73.9166667),
+('13670','13','San Pablo',10.0527778,-75.2680556),
+('13673','13','Santa Catalina',10.5833333,-75.25),
+('13683','13','Santa Rosa',10.45,-75.3333333),
+('13688','13','Santa Rosa del Sur',7.9644444,-74.0544444),
+('13744','13','Simití',7.5833333,-74.1666667),
+('13760','13','Soplaviento',10.3333333,-75.1),
+('13780','13','Talaigua Nuevo',9.3069444,-74.5686111),
+('13810','13','Tiquisio (Puerto Rico)',8.5597222,-74.2669444),
+('13836','13','Turbaco',10.35,-75.3333333),
+('13838','13','Turbaná',10.25,-75.4166667),
+('13873','13','Villanueva',10.45,-75.25),
+('13894','13','Zambrano',9.75,-74.8333333),
+('15001','15','Tunja',5.5352778,-73.3677778),
+('15022','15','Almeida',4.9166667,-73.3333333),
+('15047','15','Aquitania',5.5197222,-72.8875),
+('15051','15','Arcabuco',5.8,-73.3833333),
+('15087','15','Belén',6.0833333,-72.9166667),
+('15090','15','Berbeo',5.3333333,-73.0),
+('15092','15','Beteitiva',6.0,-72.8333333),
+('15097','15','Boavita',6.4166667,-72.5833333),
+('15104','15','Boyacá',5.5,-72.5),
+('15106','15','Briceño',5.75,-73.8333333),
+('15109','15','Buenavista',5.5,-73.9666667),
+('15114','15','Busbanza',5.9166667,-72.85),
+('15131','15','Caldas',5.55,-73.8833333),
+('15135','15','Campohermoso',5.0833333,-73.0),
+('15162','15','Cerinza',6.0,-72.9166667),
+('15172','15','Chinavita',5.25,-73.3333333),
+('15176','15','Chiquinquirá',5.6333333,-73.75),
+('15180','15','Chiscas',6.75,-72.3333333),
+('15183','15','Chita',6.1666667,-72.4166667),
+('15185','15','Chitaraque',6.0833333,-73.3666667),
+('15187','15','Chivatá',5.5333333,-73.2666667),
+('15189','15','Ciénaga',5.4666667,-73.25),
+('15204','15','Cómbita',5.75,-73.25),
+('15212','15','Coper',5.4333333,-74.0333333),
+('15215','15','Corrales',5.8666667,-72.8333333),
+('15218','15','Covarachía',6.5833333,-72.7),
+('15223','15','Cubará',7.0411111,-72.0608333),
+('15224','15','Cucaita',5.5333333,-73.4666667),
+('15226','15','Cuitiva',5.65,-72.9166667),
+('15232','15','Chíquiza',5.6083333,-73.4886111),
+('15236','15','Chívor',4.8855556,-73.3688889),
+('15238','15','Duitama',5.8269444,-73.0202778),
+('15244','15','El Cocuy',6.4166667,-72.4166667),
+('15248','15','El Espino',6.5833333,-72.4166667),
+('15272','15','Firavitoba',5.75,-72.9666667),
+('15276','15','Floresta',5.9166667,-72.9166667),
+('15293','15','Gachantivá',5.75,-73.5),
+('15296','15','Gámeza',5.85,-72.75),
+('15299','15','Garagoa',5.1333333,-73.3),
+('15317','15','Guacamayas',6.5,-72.5),
+('15322','15','Guateque',5.0833333,-73.5),
+('15325','15','Guayatá',5.0,-73.5),
+('15332','15','Guicán',6.75,-72.1666667),
+('15362','15','Izá',5.6666667,-72.9166667),
+('15367','15','Jenesano',5.3888889,-73.3680556),
+('15368','15','Jericó',6.2,-72.5833333),
+('15377','15','Labranzagrande',5.5833333,-72.5833333),
+('15380','15','La Capilla',5.15,-73.45),
+('15401','15','La Victoria',5.5258333,-74.2361111),
+('15403','15','La Uvita',6.3333333,-72.5),
+('15407','15','Villa de Leiva',5.6333333,-73.5333333),
+('15425','15','Macanal',4.9166667,-73.25),
+('15442','15','Maripí',5.5833333,-74.0),
+('15455','15','Miraflores',5.25,-73.1666667),
+('15464','15','Mongua',5.8333333,-72.6666667),
+('15466','15','Monguí',5.75,-72.8333333),
+('15469','15','Moniquirá',5.9166667,-73.5),
+('15476','15','Motavita',5.5797222,-73.3713889),
+('15480','15','Muzo',5.5166667,-74.1166667),
+('15491','15','Nobsa',5.8333333,-72.9166667),
+('15494','15','Nuevo Colón',5.4166667,-73.4166667),
+('15500','15','Oicatá',5.6,-73.3166667),
+('15507','15','Otanche',5.75,-74.25),
+('15511','15','Pachavita',5.1333333,-73.4),
+('15514','15','Páez',5.1044444,-73.0555556),
+('15516','15','Paipa',5.8333333,-73.1),
+('15518','15','Pajarito',5.4166667,-72.6666667),
+('15522','15','Panqueba',6.5,-72.4166667),
+('15531','15','Pauna',5.75,-73.9166667),
+('15532','15','Paya',5.6666667,-72.3816667),
+('15537','15','Paz de Río',6.0833333,-72.75),
+('15542','15','Pesca',5.5833333,-73.05),
+('15550','15','Pisva',5.7427778,-72.4894444),
+('15572','15','Puerto Boyacá',5.9780556,-74.5897222),
+('15580','15','Quipama',5.5222222,-74.1808333),
+('15599','15','Ramiriquí',5.4166667,-73.3333333),
+('15600','15','Ráquira',5.6166667,-73.6333333),
+('15621','15','Rondón',5.4166667,-73.1666667),
+('15632','15','Saboyá',5.75,-73.7),
+('15638','15','Sáchica',5.6666667,-73.5),
+('15646','15','Samacá',5.5,-73.5),
+('15660','15','San Eduardo',5.2166667,-73.1333333),
+('15664','15','San José de Pare',6.0833333,-73.4666667),
+('15667','15','San Luís de Gaceno',4.8213889,-73.1675),
+('15673','15','San Mateo',6.5,-72.5),
+('15676','15','San Miguel de Sema',5.55,-73.75),
+('15681','15','San Pablo de Borbur',5.75,-74.0833333),
+('15686','15','Santana',6.0572222,-73.4822222),
+('15690','15','Santa María',4.8616667,-73.2641667),
+('15693','15','Santa Rosa de Viterbo',5.9166667,-73.0),
+('15696','15','Santa Sofía',5.75,-73.5833333),
+('15720','15','Sativanorte',6.1666667,-72.6666667),
+('15723','15','Sativasur',6.1333333,-72.6666667),
+('15740','15','Siachoque',5.5833333,-73.1666667),
+('15753','15','Soatá',6.4166667,-72.6666667),
+('15755','15','Socotá',6.0833333,-72.5833333),
+('15757','15','Socha',6.0,-72.6666667),
+('15759','15','Sogamoso',5.7205556,-72.9297222),
+('15761','15','Somondoco',4.9877778,-73.4361111),
+('15762','15','Sora',5.5666667,-73.4333333),
+('15763','15','Sotaquirá',5.8333333,-73.25),
+('15764','15','Soracá',5.5,-73.3166667),
+('15774','15','Susacón',6.2666667,-72.6666667),
+('15776','15','Sutamarchán',5.6666667,-73.5833333),
+('15778','15','Sutatenza',5.0166667,-73.45),
+('15790','15','Tasco',5.9166667,-72.7),
+('15798','15','Tenza',5.15,-73.45),
+('15804','15','Tibaná',5.3333333,-73.3833333),
+('15806','15','Tibasosa',5.8333333,-72.9666667),
+('15808','15','Tinjacá',5.6333333,-73.65),
+('15810','15','Tipacoque',6.4233333,-72.6952778),
+('15814','15','Toca',5.6666667,-73.1666667),
+('15816','15','Toguí',5.95,-73.4166667),
+('15820','15','Topagá',5.8333333,-72.8333333),
+('15822','15','Tota',5.5,-73.0),
+('15832','15','Tunungua',5.7333333,-73.9333333),
+('15835','15','Turmequé',5.3333333,-73.5),
+('15837','15','Tuta',5.75,-73.1666667),
+('15839','15','Tutasá',6.1666667,-72.8333333),
+('15842','15','Úmbita',5.2333333,-73.45),
+('15861','15','Ventaquemada',5.4166667,-73.5),
+('15879','15','Viracachá',5.5,-73.25),
+('15897','15','Zetaquirá',5.35,-73.1666667),
+('17001','17','Manizales',5.07,-75.5205556),
+('17013','17','Aguadas',5.6333333,-75.4166667),
+('17042','17','Anserma',5.25,-75.75),
+('17050','17','Aranzazu',5.3,-75.45),
+('17088','17','Belalcázar',5.0,-75.8333333),
+('17174','17','Chinchiná',5.0,-75.6666667),
+('17272','17','Filadelfia',5.3,-75.6),
+('17380','17','La Dorada',5.5333333,-74.7),
+('17388','17','La Merced',5.4019444,-75.8847222),
+('17433','17','Manzanares',5.25,-75.1666667),
+('17442','17','Marmato',5.5,-75.5833333),
+('17444','17','Marquetalia',5.3333333,-75.0),
+('17446','17','Marulanda',5.3333333,-75.25),
+('17486','17','Neira',5.1666667,-75.5),
+('17495','17','Norcasia',5.5666667,-74.8833333),
+('17513','17','Pácora',5.5,-75.5),
+('17524','17','Palestina',5.0833333,-75.6666667),
+('17541','17','Pensilvania',5.5,-75.0833333),
+('17614','17','Río Sucio',5.3791667,-75.6161111),
+('17616','17','Risaralda',5.1666667,-75.75),
+('17653','17','Salamina',5.4166667,-75.4166667),
+('17662','17','Samaná',5.5833333,-74.9166667),
+('17665','17','San José',5.0858333,-75.7883333),
+('17777','17','Supía',5.5,-75.6333333),
+('17867','17','La Victoria',4.5238889,-76.0411111),
+('17873','17','Villamaría',5.0,-75.5),
+('17877','17','Viterbo',5.0833333,-75.8666667),
+('18001','18','Florencia',1.6175,-75.6175),
+('18029','18','Albania',1.3316667,-75.8822222),
+('18094','18','Belén de los Andaquíes',1.4166667,-75.9166667),
+('18150','18','Cartagena del Chairá',1.35,-74.84),
+('18205','18','Curillo',1.0352778,-75.9247222),
+('18247','18','El Doncello',1.6794444,-75.2791667),
+('18256','18','El Paujil',1.564,-75.332),
+('18410','18','La Montañita',1.5833333,-75.25),
+('18460','18','Milán',1.3483333,-75.5116667),
+('18479','18','Morelia',1.4875,-75.725),
+('18592','18','Puerto Rico',1.9141667,-75.145),
+('18610','18','San José del Fragua',1.3611111,-75.9883333),
+('18753','18','San Vicente del Caguán',2.1525,-74.7888889),
+('18765','18','Solano',0.7147222,-75.2486111),
+('18785','18','Solita',0.9,-75.623),
+('18860','18','Valparaiso',1.1991667,-75.7097222),
+('19001','19','Popayán',3.2775,-75.6213889),
+('19022','19','Almaguer',1.9166667,-76.8333333),
+('19050','19','Argelia',2.2666667,-77.25),
+('19075','19','Balboa',2.1,-77.2),
+('19100','19','Bolívar',1.8333333,-76.9166667),
+('19110','19','Buenos Aires',2.9166667,-76.6666667),
+('19130','19','Cajibío',2.6666667,-76.6666667),
+('19137','19','Caldono',2.8333333,-76.4166667),
+('19142','19','Caloto',3.0833333,-76.3333333),
+('19212','19','Corinto',3.1666667,-76.2),
+('19256','19','El Tambo',2.5,-77.0),
+('19290','19','Florencia',1.6944444,-77.0758333),
+('19300','19','Guachené',3.1333333,-76.3833333),
+('19318','19','Guapí',2.4166667,-77.6),
+('19355','19','Inzá',2.6666667,-76.0833333),
+('19364','19','Jambaló',2.85,-76.3166667),
+('19392','19','La Sierra',2.25,-76.8333333),
+('19397','19','La Vega',2.0833333,-76.8333333),
+('19418','19','López (Micay)',2.4333333,-76.8),
+('19450','19','Mercaderes',1.75,-77.1666667),
+('19455','19','Miranda',3.25,-76.25),
+('19473','19','Morales',2.8,-76.6666667),
+('19513','19','Padilla',3.0666667,-76.3166667),
+('19517','19','Páez (Belalcazar)',5.1044444,-73.0555556),
+('19532','19','Patía (El Bordo)',2.1155556,-76.9891667),
+('19533','19','Piamonte',7.7833333,-75.2),
+('19548','19','Piendamó',2.75,-76.5),
+('19573','19','Puerto Tejada',3.25,-76.4166667),
+('19585','19','Puracé (Coconuco)',2.3480556,-76.5008333),
+('19622','19','Rosas',2.3333333,-76.75),
+('19693','19','San Sebastián',1.9166667,-76.6666667),
+('19698','19','Santander de Quilichao',3.0130556,-76.4866667),
+('19701','19','Santa Rosa',1.5,-76.5),
+('19743','19','Silvia',2.75,-76.3333333),
+('19760','19','Sotara (Paispamba)',2.2566667,-76.6186111),
+('19780','19','Suárez',2.9588889,-76.6952778),
+('19785','19','Sucre',2.0333333,-76.9166667),
+('19807','19','Timbío',2.4166667,-76.75),
+('19809','19','Timbiquí',2.75,-77.5833333),
+('19821','19','Toribío',3.0,-76.1666667),
+('19824','19','Totoró',2.5833333,-76.3333333),
+('19845','19','Villa Rica',2.5136111,-76.8477778),
+('20001','20','Valledupar',10.4769444,-73.2505556),
+('20011','20','Aguachica',8.3333333,-73.5833333),
+('20013','20','Agustín Codazzi',9.9166667,-73.25),
+('20032','20','Astrea',9.5011111,-73.9802778),
+('20045','20','Becerríl',9.705,-73.2847222),
+('20060','20','Bosconia',9.9761111,-73.8902778),
+('20175','20','Chimichagua',9.2577778,-73.8177778),
+('20178','20','Chiriguaná',9.5,-73.4166667),
+('20228','20','Curumaní',9.2041667,-73.5486111),
+('20238','20','El Copey',10.1505556,-73.965),
+('20250','20','El Paso',9.6622222,-73.7519444),
+('20295','20','Gamarra',8.3333333,-73.6666667),
+('20310','20','Gonzalez',8.4,-73.3333333),
+('20383','20','La Gloria',8.5833333,-73.5833333),
+('20400','20','La Jagua de Ibirico',9.5641667,-73.3375),
+('20443','20','Manaure Balcón del Cesar',10.3927778,-73.0325),
+('20517','20','Pailitas',8.9661111,-73.6316667),
+('20550','20','Pelaya',8.6916667,-73.6663889),
+('20570','20','Pueblo Bello',10.3666667,-73.6333333),
+('20614','20','Río de oro',8.0,-73.5),
+('20621','20','La Paz (Robles)',10.1666667,-73.25),
+('20710','20','San Alberto',7.7525,-73.3891667),
+('20750','20','San Diego',10.3375,-73.1825),
+('20770','20','San Martín',8.0047222,-73.5152778),
+('20787','20','Tamalameque',8.8333333,-73.5833333),
+('23001','23','Montería',8.7575,-75.89),
+('23068','23','Ayapel',8.25,-75.25),
+('23079','23','Buenavista',8.7575,-75.89),
+('23090','23','Canalete',8.6761111,-76.2041667),
+('23162','23','Cereté',8.9166667,-76.0),
+('23168','23','Chimá',9.0833333,-75.6333333),
+('23182','23','Chinú',9.0833333,-75.3333333),
+('23189','23','Ciénaga de Oro',8.8333333,-75.6666667),
+('23300','23','Cotorra',9.05,-75.8),
+('23350','23','La Apartada',8.0497,-75.3361),
+('23417','23','Lorica',9.1666667,-75.8333333),
+('23419','23','Los Córdobas',8.9,-76.3597222),
+('23464','23','Momil',9.2372222,-75.6780556),
+('23466','23','Montelíbano',7.75,-75.6666667),
+('23500','23','Moñitos',8.25,-76.05),
+('23555','23','Planeta Rica',8.3333333,-75.5833333),
+('23570','23','Pueblo Nuevo',8.2333333,-74.9666667),
+('23574','23','Puerto Escondido',8.95,-76.25),
+('23580','23','Puerto Libertador',4.6,-74.1166667),
+('23586','23','Purísima',9.3,-75.6666667),
+('23660','23','Sahagún',8.8333333,-75.4166667),
+('23670','23','San Andrés Sotavento',9.1666667,-75.55),
+('23672','23','San Antero',9.35,-75.75),
+('23675','23','San Bernardo del Viento',9.25,-76.0),
+('23678','23','San Carlos',8.7,-75.7),
+('23682','23','San José de Uré',7.767,-75.517),
+('23686','23','San Pelayo',9.0,-75.9166667),
+('23807','23','Tierralta',8.1736111,-76.0591667),
+('23815','23','Tuchín',9.1833333,-75.55),
+('23855','23','Valencia',8.3,-76.1666667),
+('25001','25','Agua de Dios',4.4166667,-74.6666667),
+('25019','25','Albán',4.9166667,-74.45),
+('25035','25','Anapoima',4.6166667,-74.55),
+('25040','25','Anolaima',4.8333333,-74.5),
+('25053','25','Arbeláez',4.3,-74.5833333),
+('25086','25','Beltrán',4.8,-74.75),
+('25095','25','Bituima',4.9166667,-74.55),
+('25099','25','Bojacá',4.75,-74.3333333),
+('25120','25','Cabrera',3.9780556,-74.4858333),
+('25123','25','Cachipay',5.2666667,-74.5666667),
+('25126','25','Cajicá',5.0,-74.05),
+('25148','25','Caparrapí',5.4166667,-74.5833333),
+('25151','25','Cáqueza',4.45,-73.95),
+('25154','25','Carmen de Carupa',5.3502778,-73.9052778),
+('25168','25','Chaguaní',5.0,-74.65),
+('25175','25','Chía',4.9166667,-74.05),
+('25178','25','Chipaque',4.5,-74.0833333),
+('25181','25','Choachí',4.5833333,-73.9166667),
+('25183','25','Chocontá',5.1666667,-73.6666667),
+('25200','25','Cogua',5.15,-73.9666667),
+('25214','25','Cota',4.8333333,-74.1333333),
+('25224','25','Cucunubá',5.25,-73.75),
+('25245','25','El Colegio',4.5833333,-74.45),
+('25258','25','El Peñón',5.3333333,-74.3333333),
+('25260','25','El Rosal',4.85,-74.2666667),
+('25269','25','Facatativá',4.8166667,-74.3666667),
+('25279','25','Fómeque',4.5833333,-73.8333333),
+('25281','25','Fosca',4.3333333,-73.9166667),
+('25286','25','Funza',4.7833333,-74.2),
+('25288','25','Fúquene',5.4166667,-73.8),
+('25290','25','Fusagasugá',4.4166667,-74.4),
+('25293','25','Gachalá',4.6666667,-73.5),
+('25295','25','Gachancipá',5.0833333,-73.8833333),
+('25297','25','Gachetá',4.9166667,-73.6666667),
+('25299','25','Gama',4.75,-73.6),
+('25307','25','Girardot',4.3030556,-74.8008333),
+('25312','25','Granada',5.0666667,-74.5666667),
+('25317','25','Guachetá',5.4166667,-73.7),
+('25320','25','Guaduas',5.25,-74.6666667),
+('25322','25','Guasca',4.8333333,-73.8333333),
+('25324','25','Guataquí',4.5833333,-74.8),
+('25326','25','Guatavita',4.9666667,-73.75),
+('25328','25','Guayabal de Siquima',4.8813889,-74.4702778),
+('25335','25','Guayabetal',4.2163889,-73.8133333),
+('25339','25','Gutiérrez',4.25,-74.0),
+('25368','25','Jerusalén',4.6666667,-74.6666667),
+('25372','25','Junín',4.75,-73.6666667),
+('25377','25','La Calera',4.75,-73.9166667),
+('25386','25','La Mesa',4.6666667,-74.5),
+('25394','25','La Palma',5.4166667,-74.4166667),
+('25398','25','La Peña',5.25,-74.4166667),
+('25402','25','La Vega',5.0,-74.35),
+('25407','25','Lenguazaque',5.3333333,-73.6666667),
+('25426','25','Machetá',5.0833333,-73.6166667),
+('25430','25','Madrid',4.8333333,-74.3),
+('25436','25','Manta',5.0833333,-73.5833333),
+('25438','25','Medina',4.5,-73.3333333),
+('25473','25','Mosquera',4.75,-74.3333333),
+('25483','25','Nariño',4.45,-74.8),
+('25486','25','Nemocón',5.1333333,-73.9),
+('25488','25','Nilo',4.3333333,-74.5833333),
+('25489','25','Nimaima',5.2,-74.4166667),
+('25491','25','Nocaima',5.1166667,-74.4166667),
+('25506','25','Venecia (Ospina Pérez)',4.1333333,-74.5),
+('25513','25','Pacho',5.25,-74.1666667),
+('25518','25','Paime',5.4166667,-74.1666667),
+('25524','25','Pandi',4.25,-74.5),
+('25530','25','Paratebueno',4.3730556,-73.2213889),
+('25535','25','Pasca',4.3333333,-74.2833333),
+('25572','25','Puerto Salgar',5.5,-74.5833333),
+('25580','25','Pulí',4.75,-74.6666667),
+('25592','25','Quebradanegra',5.15,-74.5),
+('25594','25','Quetame',4.3333333,-73.8333333),
+('25596','25','Quipile',4.75,-74.5833333),
+('25599','25','Apulo',4.5833333,-74.5833333),
+('25612','25','Ricaurte',4.2797222,-74.7761111),
+('25645','25','San Antonio de Tequendama',4.1333333,-74.5),
+('25649','25','San Bernardo',4.2,-74.3333333),
+('25653','25','San Cayetano',5.3333333,-74.0833333),
+('25658','25','San Francisco',5.0,-74.2833333),
+('25662','25','San Juan de Río Seco',4.9166667,-74.6666667),
+('25718','25','Sasaima',5.0,-74.45),
+('25736','25','Sesquilé',5.0833333,-73.8333333),
+('25740','25','Sibaté',4.4913889,-74.2605556),
+('25743','25','Silvania',4.5,-74.3333333),
+('25745','25','Simijaca',5.5833333,-73.8333333),
+('25754','25','Soacha',4.5872222,-74.2213889),
+('25758','25','Sopó',4.9166667,-73.95),
+('25769','25','Subachoque',5.0,-74.1666667),
+('25772','25','Suesca',5.1666667,-73.8333333),
+('25777','25','Supatá',5.0833333,-74.25),
+('25779','25','Susa',5.5,-73.8333333),
+('25781','25','Sutatausa',5.251,-73.856),
+('25785','25','Tabio',5.0,-74.0833333),
+('25793','25','Tausa',5.25,-73.9166667),
+('25797','25','Tena',4.7,-74.4166667),
+('25799','25','Tenjo',4.9166667,-74.1666667),
+('25805','25','Tibacuy',4.3833333,-74.5),
+('25807','25','Tibirita',5.1333333,-73.5333333),
+('25815','25','Tocaima',4.5,-74.6666667),
+('25817','25','Tocancipá',5.0,-73.9166667),
+('25823','25','Topaipí',5.4166667,-74.3333333),
+('25839','25','Ubalá',4.8333333,-73.5),
+('25841','25','Ubaque',4.5833333,-74.0),
+('25843','25','Ubaté',5.35,-73.8333333),
+('25845','25','Une',4.3333333,-74.0833333),
+('25851','25','Útica',5.25,-74.5),
+('25862','25','Vergara',5.1666667,-74.3333333),
+('25867','25','Viani',4.9166667,-74.55),
+('25871','25','Villagómez',5.2761111,-74.1988889),
+('25873','25','Villapinzón',5.2833333,-73.5833333),
+('25875','25','Villeta',5.0833333,-74.5),
+('25878','25','Viotá',4.5,-74.5),
+('25885','25','Yacopí',5.6666667,-74.4166667),
+('25888','25','Zipacón',4.8333333,-74.4166667),
+('25899','25','Zipaquirá',5.0283333,-74.0058333),
+('27001','27','Quibdó',5.6947222,-76.6611111),
+('27006','27','Acandí',8.3333333,-77.1666667),
+('27025','27','Alto Baudó (Pie de Pato)',5.6666667,-77.0),
+('27050','27','Atrato (Yuto)',5.5333333,-76.6333333),
+('27073','27','Bagadó',5.5,-76.25),
+('27075','27','Bahía Solano (Mútis)',6.2191667,-77.4077778),
+('27077','27','Bajo Baudó',4.9561,-77.3653),
+('27086','27','Belén de Bajirá',7.3725,-76.7147222),
+('27099','27','Bojayá (Bellavista)',6.5236111,-76.9744444),
+('27135','27','Cantón de San Pablo',5.3388889,-76.7313889),
+('27150','27','Carmen del Darién (CURBARADÓ)',7.158,-76.971),
+('27160','27','Cértegui',5.4,-76.6),
+('27205','27','Condoto',5.1666667,-76.5),
+('27245','27','El Carmen de Atrato',5.8992,-76.1428),
+('27250','27','Santa Genoveva de Docorodó',4.2586111,-77.3675),
+('27361','27','Istmina',5.1588889,-76.6916667),
+('27372','27','Juradó',7.0,-77.6666667),
+('27413','27','Lloró',5.5833333,-76.4166667),
+('27425','27','Medio Atrato',5.995,-76.7822),
+('27430','27','Medio Baudó',5.1919,-76.695),
+('27450','27','Medio San Juan (ANDAGOYA)',5.1,-76.683),
+('27491','27','Novita',4.9166667,-76.5833333),
+('27495','27','Nuquí',6.0,-77.3333333),
+('27580','27','Río Iró',5.1,-76.6666667),
+('27600','27','Río Quito',5.7,-76.6666667),
+('27615','27','Ríosucio',7.4166667,-77.1666667),
+('27660','27','San José del Palmar',4.9166667,-76.25),
+('27745','27','Sipí',4.5833333,-76.5),
+('27787','27','Tadó',5.3333333,-76.4166667),
+('27800','27','Unguía',8.0430556,-77.0961111),
+('27810','27','Unión Panamericana (ÁNIMAS)',5.283,-76.617),
+('41001','41','Neiva',2.9305556,-75.3302778),
+('41006','41','Acevedo',1.75,-75.9166667),
+('41013','41','Agrado',2.3333333,-75.75),
+('41016','41','Aipe',3.25,-75.3333333),
+('41020','41','Algeciras',2.5833333,-75.25),
+('41026','41','Altamira',2.1666667,-75.8333333),
+('41078','41','Baraya',3.1666667,-75.0),
+('41132','41','Campoalegre',2.6666667,-75.3333333),
+('41206','41','Colombia',2.5,-75.75),
+('41244','41','Elías',2.0833333,-76.0),
+('41298','41','Garzón',2.25,-75.5833333),
+('41306','41','Gigante',2.5,-75.5),
+('41319','41','Guadalupe',2.0833333,-75.6666667),
+('41349','41','Hobo',2.5833333,-75.5),
+('41357','41','Íquira',2.75,-75.75),
+('41359','41','Isnos',2.0833333,-76.25),
+('41378','41','La Argentina',2.25,-76.1666667),
+('41396','41','La Plata',2.4166667,-76.1666667),
+('41483','41','Nátaga',2.65,-75.8),
+('41503','41','Oporapa',2.0833333,-76.0166667),
+('41518','41','Paicol',2.45,-75.75),
+('41524','41','Palermo',3.0,-75.5),
+('41530','41','Palestina',1.75,-76.0666667),
+('41548','41','Pital',2.3333333,-75.8333333),
+('41551','41','Pitalito',1.75,-76.1666667),
+('41615','41','Rivera',2.8333333,-75.1666667),
+('41660','41','Saladoblanco',2.0144444,-76.0502778),
+('41668','41','San Agustín',1.9166667,-76.3333333),
+('41676','41','Santa María',3.0,-75.7),
+('41770','41','Suaza',1.9166667,-75.8333333),
+('41791','41','Tarqui',2.1666667,-75.9166667),
+('41797','41','Tesalia',2.6666667,-75.75),
+('41799','41','Tello',3.0833333,-75.0833333),
+('41801','41','Teruel',2.9166667,-75.6666667),
+('41807','41','Timaná',2.0,-75.9166667),
+('41872','41','Villavieja',3.3333333,-75.1666667),
+('41885','41','Yaguará',2.6666667,-75.5833333),
+('44001','44','Riohacha',11.5444444,-72.9072222),
+('44035','44','Albania',11.1597222,-72.5855556),
+('44078','44','Barrancas',11.0,-72.75),
+('44090','44','Dibulla',11.2722222,-73.3055556),
+('44098','44','Distracción',10.8977778,-72.8869444),
+('44110','44','El Molino',10.6533333,-72.9241667),
+('44279','44','Fonseca',10.8333333,-72.8333333),
+('44378','44','Hatonuevo',11.0694444,-72.7669444),
+('44420','44','La Jagua del Pilar',10.5166667,-73.0833333),
+('44430','44','Maicao',11.3841667,-72.2441667),
+('44560','44','Manaure',11.7791667,-72.4494444),
+('44650','44','San Juan del Cesar',10.8333333,-73.0833333),
+('44847','44','Uribia',11.9166667,-72.0),
+('44855','44','Urumita',10.5666667,-73.0166667),
+('44874','44','Villanueva',10.5833333,-73.0),
+('47001','47','Santa Marta',11.2472222,-74.2016667),
+('47030','47','Algarrobo',10.1869444,-74.5752778),
+('47053','47','Aracataca',10.5833333,-74.0),
+('47058','47','Ariguaní (El Difícil)',10.25,-74.0),
+('47161','47','Cerro San Antonio',10.25,-74.8333333),
+('47170','47','Chivolo',10.0280556,-74.6436111),
+('47189','47','Ciénaga',10.8333333,-74.0833333),
+('47205','47','Concordia',9.8402778,-74.4447222),
+('47245','47','El Banco',9.0455556,-73.9747222),
+('47258','47','El Piñon',10.3333333,-74.6666667),
+('47268','47','El Retén',10.6166667,-74.2666667),
+('47288','47','Fundación',10.4166667,-73.9166667),
+('47318','47','Guamal',9.25,-74.1666667),
+('47441','47','Pedraza',10.1666667,-74.75),
+('47460','47','Nueva Granada',9.8030556,-74.3902778),
+('47545','47','Pijiño',9.3302778,-74.4497222),
+('47551','47','Pivijay',10.4166667,-74.3333333),
+('47555','47','Plato',9.8333333,-74.3333333),
+('47570','47','Puebloviejo',10.9833333,-74.3333333),
+('47605','47','Remolino',10.6666667,-74.5833333),
+('47660','47','Sabanas de San Angel (SAN ANGEL)',10.033,-74.217),
+('47675','47','Salamina',10.5,-74.7),
+('47692','47','San Sebastián de Buenavista',9.3333333,-74.3333333),
+('47703','47','San Zenón',9.3333333,-74.3),
+('47707','47','Santa Ana',9.3166667,-74.5833333),
+('47720','47','Santa Bárbara de Pinto',10.6,-74.167),
+('47745','47','Sitionuevo',10.9166667,-74.5833333),
+('47798','47','Tenerife',10.0,-74.6666667),
+('47960','47','Zapayán (PUNTA DE PIEDRAS)',10.171,-74.719),
+('47980','47','Zona Bananera',10.7631,-74.145),
+('50001','50','Villavicencio',4.1533333,-73.635),
+('50006','50','Acacías',3.9166667,-73.8333333),
+('50110','50','Barranca de Upía',4.5755556,-72.9611111),
+('50124','50','Cabuyaro',4.2902778,-72.7905556),
+('50150','50','Castilla la Nueva',3.8,-73.5833333),
+('50223','50','Cubarral',3.7713889,-73.8377778),
+('50226','50','Cumaral',4.25,-73.3333333),
+('50245','50','El Calvario',4.4166667,-73.6666667),
+('50251','50','El Castillo',3.5680556,-73.7838889),
+('50270','50','El Dorado',2.7791667,-72.8719444),
+('50287','50','Fuente de Oro',3.4594444,-73.6127778),
+('50313','50','Granada',3.5386111,-73.7005556),
+('50318','50','Guamal',3.9166667,-74.0),
+('50325','50','Mapiripan',2.8911111,-72.1322222),
+('50330','50','Mesetas',3.3780556,-74.0447222),
+('50350','50','La Macarena',2.8536111,-73.9436111),
+('50370','50','Uribe',3.254,-74.358),
+('50400','50','Lejanías',3.5136111,-74.0516667),
+('50450','50','Puerto Concordia',2.6794444,-72.7608333),
+('50568','50','Puerto Gaitán',4.3141667,-72.0825),
+('50573','50','Puerto López',4.0833333,-72.9666667),
+('50577','50','Puerto Lleras',3.0,-72.5),
+('50590','50','Puerto Rico',2.9383333,-73.2083333),
+('50606','50','Restrepo',4.1666667,-73.4166667),
+('50680','50','San Carlos de Guaroa',3.7122222,-73.2436111),
+('50683','50','San Juan de Arama',3.3463889,-73.8894444),
+('50686','50','San Juanito',4.4586111,-73.6730556),
+('50689','50','San Martín',3.7,-73.7),
+('50711','50','Vista Hermosa',3.0863889,-73.7513889),
+('52001','52','Pasto',1.21467073681653,-77.2786474227905),
+('52019','52','Albán (San José)',1.4744444,-77.0836111),
+('52022','52','Aldana',0.9166667,-77.6833333),
+('52036','52','Ancuya',1.25,-77.5),
+('52051','52','Arboleda (Berruecos)',1.5033333,-77.0877778),
+('52079','52','Barbacoas',1.5833333,-78.0),
+('52083','52','Belén',1.5975,-77.0175),
+('52110','52','Buesaco',1.25,-77.0833333),
+('52203','52','Colón (Génova)',1.5833333,-77.0),
+('52207','52','Consaca',1.20840649727186,-77.4632263183594),
+('52210','52','Contadero',0.9166667,-77.5333333),
+('52215','52','Córdoba',0.7833333,-77.3333333),
+('52224','52','Cuaspud (Carlosama)',0.8658333,-77.7294444),
+('52227','52','Cumbal',0.9166667,-77.9166667),
+('52233','52','Cumbitara',1.6533333,-77.5833333),
+('52240','52','Chachaguí',1.35943053925138,-77.2836685180664),
+('52250','52','El Charco',2.3333333,-78.35),
+('52254','52','El Peñol',1.4333333,-77.4333333),
+('52256','52','El Rosario',1.8333333,-77.3333333),
+('52258','52','El Tablón de Gómez',1.4269,-77.0975),
+('52260','52','El Tambo',1.4,-77.3333333),
+('52287','52','Funes',0.95,-77.3333333),
+('52317','52','Guachucal',1.0,-77.75),
+('52320','52','Guaitarilla',1.15,-77.5),
+('52323','52','Gualmatán',0.8333333,-77.5833333),
+('52352','52','Iles',0.95,-77.5333333),
+('52354','52','Imúes',1.05,-77.5),
+('52356','52','Ipiales',0.8302778,-77.6444444),
+('52378','52','La Cruz',1.55,-76.8833333),
+('52381','52','La Florida',1.25,-77.4166667),
+('52385','52','La Llanada',1.4777778,-77.5838889),
+('52390','52','La Tola',2.4108333,-78.2427778),
+('52399','52','La Unión',1.5833333,-77.0833333),
+('52405','52','Leiva',1.9375,-77.3080556),
+('52411','52','Linares',1.3833333,-77.45),
+('52418','52','Sotomayor (Los Andes)',1.5155556,-77.495),
+('52427','52','Magüi (Payán)',1.9166667,-77.8333333),
+('52435','52','Mallama (Piedrancha)',1.0833333,-77.8166667),
+('52473','52','Mosquera',2.35,-78.35),
+('52480','52','Nariño',1.5,-78.0),
+('52490','52','Olaya Herrera',1.2666667,-77.4833333),
+('52506','52','Ospina',1.0333333,-77.55),
+('52520','52','Francisco Pizarro',2.1019444,-78.7216667),
+('52540','52','Policarpa',1.6316667,-77.4616667),
+('52560','52','Potosí',0.75,-77.4166667),
+('52565','52','Providencia',1.5702778,-77.4694444),
+('52573','52','Puerres',0.9166667,-77.25),
+('52585','52','Pupiales',0.9166667,-77.6666667),
+('52612','52','Ricaurte',1.1666667,-78.1666667),
+('52621','52','Roberto Payán (San José)',1.9166667,-78.3333333),
+('52678','52','Samaniego',1.4166667,-77.6666667),
+('52683','52','Sandoná',1.25,-77.45),
+('52685','52','San Bernardo',1.5163889,-77.0466667),
+('52687','52','San Lorenzo',1.5,-77.1666667),
+('52693','52','San Pablo',1.6666667,-76.9166667),
+('52694','52','San Pedro de Cartago',1.5613889,-77.1180556),
+('52695','52','Santa Bárbara (Iscuandé)',2.3333333,-77.9166667),
+('52699','52','Guachavés',1.2247222,-77.68),
+('52720','52','Sapuyes',1.0333333,-77.6),
+('52786','52','Taminango',1.5833333,-77.25),
+('52788','52','Tangua',1.0833333,-77.3),
+('52835','52','Tumaco',1.7986111,-78.8155556),
+('52838','52','Túquerres',1.1666667,-77.5833333),
+('52885','52','Yacuanquer',1.0833333,-77.4166667),
+('54001','54','Cúcuta',7.8939,-72.5078),
+('54003','54','Ábrego',8.0,-73.2),
+('54051','54','Arboledas',7.6666667,-72.75),
+('54099','54','Bochalema',7.6666667,-72.5833333),
+('54109','54','Bucarasica',8.0833333,-73.0),
+('54125','54','Cácota',7.25,-72.5833333),
+('54128','54','Cáchira',7.75,-73.1666667),
+('54172','54','Chinácota',7.75,-72.55),
+('54174','54','Chitagá',7.1666667,-72.5833333),
+('54206','54','Convención',8.8333333,-73.2),
+('54223','54','Cucutilla',7.5,-72.75),
+('54239','54','Durania',7.75,-72.6333333),
+('54245','54','El Carmen',8.75,-73.3333333),
+('54250','54','El Tarra',8.5847222,-73.0883333),
+('54261','54','El Zulia',7.9355556,-72.605),
+('54313','54','Gramalote',7.9166667,-72.75),
+('54344','54','Hacarí',8.5,-73.0833333),
+('54347','54','Herrán',7.5,-72.4666667),
+('54377','54','Labateca',7.3333333,-72.5),
+('54385','54','La Esperanza',8.1666667,-72.4666667),
+('54398','54','La Playa',8.25,-73.1666667),
+('54405','54','Los Patios',7.8383333,-72.5133333),
+('54418','54','Lourdes',7.9666667,-72.8333333),
+('54480','54','Mutiscua',7.3333333,-72.7166667),
+('54498','54','Ocaña',8.25,-73.3),
+('54518','54','Pamplona',7.3780556,-72.6525),
+('54520','54','Pamplonita',7.5,-72.5833333),
+('54553','54','Puerto Santander',8.3636111,-72.4075),
+('54599','54','Ragonvalia',7.5833333,-72.5),
+('54660','54','Salazar',7.8,-72.8333333),
+('54670','54','San Calixto',8.75,-73.0333333),
+('54673','54','San Cayetano',7.8833333,-72.5833333),
+('54680','54','Santiago',7.9166667,-72.6666667),
+('54720','54','Sardinata',8.25,-72.75),
+('54743','54','Silos',7.2,-72.75),
+('54800','54','Teorama',8.75,-73.1666667),
+('54810','54','Tibú',8.6480556,-72.7394444),
+('54820','54','Toledo',7.3,-72.25),
+('54871','54','Villa Caro',7.9169444,-72.9763889),
+('54874','54','Villa del Rosario',7.8338889,-72.4741667),
+('63001','63','Armenia',4.5338889,-75.6811111),
+('63111','63','Buenavista',4.3622222,-75.7394444),
+('63130','63','Calarcá',4.5325,-75.6436111),
+('63190','63','Circasia',4.6166667,-75.6333333),
+('63212','63','Cordobá',4.3905556,-75.6888889),
+('63272','63','Filandia',4.6666667,-75.6333333),
+('63302','63','Génova',4.25,-75.6666667),
+('63401','63','La Tebaida',4.45,-75.8),
+('63470','63','Montenegro',4.5,-75.8),
+('63548','63','Pijao',4.3333333,-75.6666667),
+('63594','63','Quimbaya',4.6333333,-75.75),
+('63690','63','Salento',4.6666667,-75.5),
+('66001','66','Pereira',4.8133333,-75.6961111),
+('66045','66','Apía',5.1666667,-76.0),
+('66075','66','Balboa',4.9166667,-75.95),
+('66088','66','Belén de Umbría',5.25,-75.9166667),
+('66170','66','Dos Quebradas',4.8347222,-75.6725),
+('66318','66','Guática',5.3333333,-75.8333333),
+('66383','66','La Celia',4.9666667,-76.0),
+('66400','66','La Virginia',4.9166667,-75.8333333),
+('66440','66','Marsella',4.9166667,-75.75),
+('66456','66','Mistrató',5.4166667,-76.0),
+('66572','66','Pueblo Rico',5.25,-76.1666667),
+('66594','66','Quinchía',5.3333333,-75.6666667),
+('66682','66','Santa Rosa de Cabal',4.8680556,-75.6213889),
+('66687','66','Santuario',5.0833333,-76.0),
+('68001','68','Bucaramanga',7.1297222,-73.1258333),
+('68013','68','Aguada',6.25,-73.4666667),
+('68020','68','Albania',5.8333333,-73.75),
+('68051','68','Aratoca',6.8333333,-72.9666667),
+('68077','68','Barbosa',6.0,-73.55),
+('68079','68','Barichara',6.75,-73.1666667),
+('68081','68','Barrancabermeja',7.0652778,-73.8547222),
+('68092','68','Betulia',7.0833333,-73.3333333),
+('68101','68','Bolívar',6.25,-74.0),
+('68121','68','Cabrera',6.6333333,-73.2),
+('68132','68','California',7.4166667,-72.85),
+('68147','68','Capitanejo',6.6,-72.6333333),
+('68152','68','Carcasí',6.8333333,-72.5),
+('68160','68','Cepita',6.8333333,-72.9166667),
+('68162','68','Cerrito',7.0,-72.5833333),
+('68167','68','Charalá',6.25,-73.0833333),
+('68169','68','Charta',7.3,-72.9666667),
+('68176','68','Chima',6.4166667,-73.3333333),
+('68179','68','Chipatá',6.1333333,-73.55),
+('68190','68','Cimitarra',6.3161111,-73.9505556),
+('68207','68','Concepción',6.9166667,-72.5),
+('68209','68','Confines',6.4166667,-73.1666667),
+('68211','68','Contratación',6.3333333,-73.4166667),
+('68217','68','Coromoro',6.3333333,-73.0),
+('68229','68','Curití',6.6666667,-73.0),
+('68235','68','El Carmen',6.698,-73.511),
+('68245','68','El Guacamayo',6.3333333,-73.4666667),
+('68250','68','El Peñon',6.55,-72.8333333),
+('68255','68','El Playón',7.4766667,-73.2080556),
+('68264','68','Encino',6.1666667,-73.0),
+('68266','68','Enciso',6.75,-72.6333333),
+('68271','68','Florián',5.8047222,-73.9741667),
+('68276','68','Floridablanca',7.0647222,-73.0897222),
+('68296','68','Galán',6.7,-73.3),
+('68298','68','Gámbita',6.0,-73.25),
+('68306','68','Girón',7.0708333,-73.1730556),
+('68307','68','Girón',7.0731,-73.1681),
+('68318','68','Guaca',7.0,-72.7666667),
+('68320','68','Guadalupe',6.3,-73.3333333),
+('68322','68','Guapota',6.3833333,-73.25),
+('68324','68','Guavatá',6.0,-73.65),
+('68327','68','Guepsa',6.0833333,-73.5),
+('68344','68','Hato',6.5833333,-73.3333333),
+('68368','68','Jesús María',5.9166667,-73.8333333),
+('68370','68','Jordán',6.75,-73.0666667),
+('68377','68','La Belleza',5.8613889,-73.9683333),
+('68385','68','Landázuri',6.2238889,-73.8127778),
+('68397','68','La Paz',6.25,-73.4666667),
+('68406','68','Lebrija',7.4166667,-73.4166667),
+('68418','68','Los Santos',6.9166667,-73.0833333),
+('68425','68','Macaravita',6.5833333,-72.5333333),
+('68432','68','Málaga',6.7833333,-72.6666667),
+('68444','68','Matanza',7.4166667,-73.0833333),
+('68464','68','Mogotes',6.5833333,-72.9166667),
+('68468','68','Molagavita',6.75,-72.75),
+('68498','68','Ocamonte',6.4166667,-73.0833333),
+('68500','68','Oiba',6.3,-73.25),
+('68502','68','Onzaga',6.3333333,-72.75),
+('68522','68','Palmar',6.5833333,-73.25),
+('68524','68','Palmas del Socorro',6.45,-73.25),
+('68533','68','Páramo',6.5,-73.1333333),
+('68547','68','Pie de Cuesta',5.8383333,-74.0366667),
+('68549','68','Pinchote',6.5833333,-73.1666667),
+('68572','68','Puente Nacional',5.9166667,-73.5833333),
+('68573','68','Puerto Parra',6.6516667,-74.0608333),
+('68575','68','Puerto Wilches',7.5833333,-73.6666667),
+('68615','68','Rionegro',7.2191667,-73.1558333),
+('68655','68','Sabana de Torres',7.3980556,-73.4969444),
+('68669','68','San Andrés',6.8333333,-72.75),
+('68673','68','San Benito',6.1666667,-73.4666667),
+('68679','68','San Gíl',6.5833333,-73.0833333),
+('68682','68','San Joaquín',6.4333333,-72.8666667),
+('68684','68','San Miguel',6.6666667,-72.55),
+('68686','68','San José de Miranda',6.7,-72.6666667),
+('68689','68','San Vicente del Chucurí',6.8836111,-73.4138889),
+('68705','68','Santa Bárbara',6.9927778,-72.9102778),
+('68720','68','Santa Helena del Opón',6.3375,-73.5919444),
+('68745','68','Simacota',6.4472222,-73.3413889),
+('68755','68','Socorro',6.5333333,-73.2),
+('68770','68','Suaita',6.1666667,-73.3),
+('68773','68','Sucre',6.0833333,-73.9166667),
+('68780','68','Suratá',7.5,-72.9666667),
+('68820','68','Tona',7.25,-72.9),
+('68855','68','Valle de San José',6.5,-73.0666667),
+('68861','68','Vélez',6.0833333,-73.5833333),
+('68867','68','Vetas',7.3333333,-72.8666667),
+('68872','68','Villanueva',6.6741667,-73.1777778),
+('68895','68','Zapatoca',6.8333333,-73.25),
+('70001','70','Sincelejo',9.3047222,-75.3977778),
+('70110','70','Buenavista',9.3222222,-74.9772222),
+('70124','70','Caimito',8.8333333,-75.1666667),
+('70204','70','Colosó (Ricaurte)',9.4966667,-75.3555556),
+('70215','70','Corozal',9.3333333,-75.25),
+('70221','70','Coveñas',9.4166667,-75.7),
+('70230','70','Chalán',9.5491667,-75.3161111),
+('70233','70','El Roble',9.1,-75.2),
+('70235','70','Galeras (Nueva Granada)',9.1630556,-75.0525),
+('70265','70','Guaranda',8.4697222,-75.5383333),
+('70400','70','La Unión',8.8605556,-75.2805556),
+('70418','70','Los Palmitos',9.3811111,-75.2713889),
+('70429','70','Majagual',8.5,-74.6666667),
+('70473','70','Morroa',9.4166667,-75.3333333),
+('70508','70','Ovejas',9.5,-75.1666667),
+('70523','70','Palmito',9.3333333,-75.55),
+('70670','70','Sampués',9.1666667,-75.3),
+('70678','70','San Benito Abad',8.75,-74.9166667),
+('70702','70','San Juan de Betulia',9.2755556,-75.2455556),
+('70708','70','San Marcos',8.5833333,-75.1666667),
+('70713','70','San Onofre',9.8333333,-75.5),
+('70717','70','San Pedro',9.4166667,-75.0),
+('70742','70','Sincé',9.1666667,-75.0),
+('70771','70','Sucre',9.0,-75.0),
+('70820','70','Tolú',9.5,-75.5333333),
+('70823','70','Tolúviejo',9.4517,-75.4394),
+('73001','73','Ibagué',4.4388889,-75.2322222),
+('73024','73','Alpujarra',3.4166667,-74.9166667),
+('73026','73','Alvarado',4.5833333,-75.0),
+('73030','73','Ambalema',4.8333333,-74.8333333),
+('73043','73','Anzoátegui',4.6666667,-75.25),
+('73055','73','Armero (Guayabal)',5.0833333,-74.8333333),
+('73067','73','Ataco',3.3333333,-75.6666667),
+('73124','73','Cajamarca',4.4166667,-75.5),
+('73148','73','Carmen de Apicalá',4.15,-74.7333333),
+('73152','73','Casabianca',5.0833333,-75.1666667),
+('73168','73','Chaparral',3.75,-75.5833333),
+('73200','73','Coello',4.3333333,-74.9166667),
+('73217','73','Coyaima',3.8333333,-75.0833333),
+('73226','73','Cunday',4.0833333,-74.6666667),
+('73236','73','Dolores',3.6666667,-74.75),
+('73268','73','Espinal',4.2,-74.8333333),
+('73270','73','Falan',5.1333333,-75.0),
+('73275','73','Flandes',4.25,-74.8333333),
+('73283','73','Fresno',5.1666667,-75.0833333),
+('73319','73','Guamo',4.0833333,-74.9166667),
+('73347','73','Herveo',5.0833333,-75.1666667),
+('73349','73','Honda',5.25,-74.8333333),
+('73352','73','Icononzo',4.1666667,-74.55),
+('73408','73','Lérida',4.9166667,-74.9166667),
+('73411','73','Líbano',4.9166667,-75.1666667),
+('73443','73','Mariquita',5.25,-74.9166667),
+('73449','73','Melgar',4.25,-74.5833333),
+('73461','73','Murillo',4.8769444,-75.1738889),
+('73483','73','Natagaima',3.5833333,-75.0833333),
+('73504','73','Ortega',3.9166667,-75.25),
+('73520','73','Palocabildo',5.1333333,-75.0333333),
+('73547','73','Piedras',4.5,-74.9166667),
+('73555','73','Planadas',3.25,-75.75),
+('73563','73','Prado',3.75,-74.8333333),
+('73585','73','Purificación',3.9166667,-74.9166667),
+('73616','73','Rioblanco',3.5,-75.8333333),
+('73622','73','Roncesvalles',4.0833333,-75.5833333),
+('73624','73','Rovira',4.25,-75.3333333),
+('73671','73','Saldaña',3.9347222,-75.0202778),
+('73675','73','San Antonio',3.9166667,-75.5),
+('73678','73','San Luis',4.1666667,-75.0833333),
+('73686','73','Santa Isabel',4.75,-75.1666667),
+('73770','73','Suárez',4.0833333,-74.7833333),
+('73854','73','Valle de San Juan',4.25,-75.1666667),
+('73861','73','Venadillo',4.75,-74.9166667),
+('73870','73','Villahermosa',5.0,-75.1666667),
+('73873','73','Villarrica',4.0,-74.5833333),
+('76001','76','Cali',3.4372222,-76.5225),
+('76020','76','Alcalá',4.6666667,-75.75),
+('76036','76','Andalucía',4.1741667,-76.1702778),
+('76041','76','Ansermanuevo',4.7972222,-75.995),
+('76054','76','Argelia',4.7,-76.1333333),
+('76100','76','Bolívar',4.3333333,-76.3333333),
+('76109','76','Buenaventura',3.8933333,-77.0697222),
+('76111','76','Buga',3.9022222,-76.3027778),
+('76113','76','Bugalagrande',4.2094444,-76.1602778),
+('76122','76','Caicedonia',4.33365917459535,-75.8342456817627),
+('76126','76','Calima (Darién)',3.9166667,-76.6666667),
+('76130','76','Candelaria',3.4130556,-76.3511111),
+('76147','76','Cartago',4.7463889,-75.9116667),
+('76233','76','Dagua',3.6602778,-76.6927778),
+('76243','76','El Águila',4.9166667,-76.0833333),
+('76246','76','El Cairo',4.75,-76.25),
+('76248','76','El Cerrito',3.6666667,-76.1666667),
+('76250','76','El Dovio',4.5,-76.25),
+('76275','76','Florida',3.3275,-76.2386111),
+('76306','76','Ginebra',3.75,-76.1666667),
+('76318','76','Guacarí',3.7694444,-76.3380556),
+('76364','76','Jamundí',3.1666667,-76.5833333),
+('76400','76','La Unión',4.5358333,-76.1066667),
+('76403','76','La Victoria',4.5238889,-76.0411111),
+('76497','76','Obando',4.5833333,-75.9166667),
+('76520','76','Palmira',3.5394444,-76.3036111),
+('76563','76','Pradera',3.4211111,-76.2447222),
+('76606','76','Restrepo',3.7833333,-76.5),
+('76616','76','Riofrío',4.0833333,-76.3333333),
+('76622','76','Roldanillo',4.4147222,-76.1547222),
+('76670','76','San Pedro',4.0,-76.1666667),
+('76677','76','La Cumbre',3.6666667,-76.5833333),
+('76736','76','Sevilla',4.2688889,-75.9361111),
+('76823','76','Toro',4.6116667,-76.0813889),
+('76828','76','Trujillo',4.25,-76.3333333),
+('76834','76','Tulúa',4.0866667,-76.2),
+('76845','76','Ulloa',4.7166667,-75.75),
+('76863','76','Versalles',4.6666667,-76.25),
+('76869','76','Vijes',3.6986111,-76.4491667),
+('76890','76','Yotoco',3.9166667,-76.3333333),
+('76892','76','Yumbo',3.585,-76.4958333),
+('76895','76','Zarzal',4.3983333,-76.0772222),
+('81001','81','Arauca',7.0902778,-70.7616667),
+('81065','81','Arauquita',6.8219444,-71.3236111),
+('81220','81','Cravo Norte',6.3030556,-70.2016667),
+('81300','81','Fortúl',6.7461111,-71.8566667),
+('81591','81','Puerto Rondón',6.2780556,-71.1),
+('81736','81','Saravena',6.9205556,-71.8533333),
+('81794','81','Tame',6.4641667,-71.7288889),
+('85001','85','Yopal',5.3394444,-72.3941667),
+('85010','85','Aguazul',5.1730556,-72.5547222),
+('85015','85','Chámeza',5.0,-72.75),
+('85125','85','Hato Corozal',6.1555556,-71.7655556),
+('85136','85','La Salina',6.1852778,-72.3444444),
+('85139','85','Maní',4.8333333,-72.3333333),
+('85162','85','Monterrey',4.9166667,-72.8333333),
+('85225','85','Nunchía',5.6405556,-72.1986111),
+('85230','85','Orocué',4.7941667,-71.34),
+('85250','85','Paz de Ariporo',5.8833333,-71.9),
+('85263','85','Pore',5.6708333,-71.93),
+('85279','85','Recetor',5.3333333,-72.75),
+('85300','85','Sabanalarga',4.8536111,-73.0430556),
+('85315','85','Sácama',6.0833333,-72.0833333),
+('85325','85','San Luís de Palenque',5.2805556,-71.5819444),
+('85400','85','Támara',5.8297222,-72.1633333),
+('85410','85','Tauramena',5.0186111,-72.7552778),
+('85430','85','Trinidad',5.4305556,-71.6311111),
+('85440','85','Villanueva',5.2833333,-71.9666667),
+('86001','86','Mocoa',1.1488889,-76.6477778),
+('86219','86','Colón',1.1936111,-76.9769444),
+('86320','86','Orito',0.6966667,-76.8747222),
+('86568','86','Puerto Asís',0.5158333,-76.495),
+('86569','86','Puerto Caicedo',0.6838889,-76.5858333),
+('86571','86','Puerto Guzmán',0.9702778,-76.5858333),
+('86573','86','Puerto Leguízamo',-0.2,-74.7666667),
+('86749','86','Sibundoy',1.1833333,-76.9166667),
+('86755','86','San Francisco',1.1772222,-76.8830556),
+('86757','86','San Miguel',0.3394444,-76.8830556),
+('86760','86','Santiago',1.1511111,-77.0075),
+('86865','86','Valle del Guamuez',0.4525,-76.9191667),
+('86885','86','Villagarzón',1.038,-76.627),
+('88001','88','San Andrés',12.5847,-81.7006),
+('88564','88','Providencia',12.5,-81.75),
+('91001','91','Leticia',-4.2152778,-69.9405556),
+('91540','91','Puerto Nariño',-3.7702778,-70.3830556),
+('94001','94','Inírida',3.8652778,-67.9238889),
+('94343','94','Barrancominas',3.4936,-69.8072),
+('95001','95','San José del Guaviare',2.5683333,-72.6416667),
+('95015','95','Calamar',1.9597222,-72.6538889),
+('95025','95','El Retorno',2.3305556,-72.6277778),
+('95200','95','Miraflores',1.3366667,-71.9511111),
+('97001','97','Mitú',1.1983333,-70.1733333),
+('97161','97','Carurú',0.9166667,-70.7333333),
+('97666','97','Taraira',0.4938889,-69.6669444),
+('99001','99','Puerto Carreño',6.1877778,-67.4730556),
+('99524','99','La Primavera',5.4905556,-70.4091667),
+('99624','99','Santa Rosalía',5.1261111,-70.8758333),
+('99773','99','Cumaribo',4.4444444,-69.8002778)
+on conflict (codigo) do update set departamento = excluded.departamento, nombre = excluded.nombre, lat = excluded.lat, lng = excluded.lng;
+
+insert into categorias (id, nombre, orden) values
+('hogar','Hogar',0),
+('tecnologia','Tecnología',1),
+('construccion','Construcción',2),
+('belleza','Belleza',3),
+('transporte','Transporte',4),
+('salud','Salud',5),
+('mascotas','Mascotas',6),
+('mas','Más',7)
+on conflict (id) do update set nombre = excluded.nombre, orden = excluded.orden;
+
+insert into servicios (id, nombre, corto, categoria, foto, orden) values
+('plomeria','Plomería','Plomería','hogar','img/plomeria.jpg',0),
+('electricidad','Electricidad','Electricidad','hogar','img/electricidad.jpg',1),
+('aire','Aire acondicionado','Aire acond.','hogar','img/aire.jpg',2),
+('pintura','Pintura','Pintura','construccion','img/pintura.jpg',3),
+('limpieza','Limpieza del hogar','Limpieza','hogar',null,4),
+('albanileria','Albañilería','Albañilería','construccion',null,5),
+('computadores','Reparación de computadores','Computadores','tecnologia',null,6),
+('celulares','Reparación de celulares','Celulares','tecnologia',null,7),
+('peluqueria','Corte de cabello','Peluquería','belleza',null,8),
+('manicure','Manicure y pedicure','Manicure','belleza',null,9),
+('mudanzas','Mudanzas y fletes','Mudanzas','transporte',null,10),
+('conductor','Conductor elegido','Conductor','transporte',null,11),
+('enfermeria','Cuidado y enfermería','Enfermería','salud',null,12),
+('paseo','Paseo de perros','Paseo perros','mascotas',null,13),
+('veterinaria','Veterinaria a domicilio','Veterinaria','mascotas',null,14)
+on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, categoria = excluded.categoria, foto = excluded.foto, orden = excluded.orden;
+
+insert into aliados (id, marca, oferta, costo, color) values
+(1,'Homecenter','10% en herramientas y materiales',300,'bg-[#fff1e0] text-[#c2410c]'),
+(2,'Juan Valdez','Café gratis por tu buena reputación',150,'bg-[#f3eadf] text-[#7c4a1e]'),
+(3,'Rappi','Envío gratis en tu próximo pedido',200,'bg-[#ffe7e3] text-[#e11d48]'),
+(4,'Cine Colombia','2x1 en boletas de lunes a jueves',400,'bg-[#e8ecff] text-brand')
+on conflict (id) do update set marca = excluded.marca, oferta = excluded.oferta, costo = excluded.costo, color = excluded.color;
+
+select setval('aliados_id_seq', (select max(id) from aliados));
+
+insert into config (clave, valor) values ('auto_respuesta_demo','true'),('demo_login_1','daniela@conectapro.co'),('demo_login_2','carlos@conectapro.co'),('demo_login_3','juan@conectapro.co'),('demo_login_4','andres@conectapro.co') on conflict (clave) do update set valor = excluded.valor;
+
+insert into perfiles (id, nombre, correo, foto, celular, documento, departamento, municipio, puntos, calificacion, num_resenas, verificado, demo) values
+('a0000000-0000-4000-8000-000000000001','Daniela Jaramillo','daniela@conectapro.co','img/daniela.jpg','3009876543','1000000001','05','05615',320,4.9,14,true,true),
+('a0000000-0000-4000-8000-000000000002','Carlos Ramírez','carlos@conectapro.co','img/carlos.jpg','3001234567','1000000002','05','05615',540,4.8,6,true,true),
+('a0000000-0000-4000-8000-000000000003','Juan Pérez','juan@conectapro.co','img/cliente2.jpg','3012223344','1000000003','05','05615',180,4.7,8,true,true),
+('a0000000-0000-4000-8000-000000000004','Andrés Torres','andres@conectapro.co','img/andres.jpg','3015550101','1000000004','05','05615',410,4.7,5,true,true),
+('a0000000-0000-4000-8000-000000000005','María López','maria.lopez@ejemplo.co','img/cliente1.jpg','3101112233','1000000005','05','05615',100,4.9,12,true,true),
+('a0000000-0000-4000-8000-000000000006','Santiago Ruiz','santiago.ruiz@ejemplo.co','img/cliente3.jpg','3102223344','1000000006','05','05615',100,4.8,5,true,true),
+('a0000000-0000-4000-8000-000000000007','Laura Gómez','laura.gomez@ejemplo.co',null,'3103334455','1000000007','05','05615',100,4.6,9,true,true),
+('a0000000-0000-4000-8000-000000000008','Pedro Salazar','pedro.salazar@ejemplo.co',null,'3104445566','1000000008','05','05615',100,4.5,3,true,true),
+('a0000000-0000-4000-8000-000000000009','Valeria Contreras','valeria.contreras@ejemplo.co',null,'3165556677','1000000009','54','54001',100,4.8,7,true,true),
+('a0000000-0000-4000-8000-000000000010','Óscar Jaimes','oscar.jaimes@ejemplo.co',null,'3166667788','1000000010','54','54001',100,4.6,4,true,true),
+('a0000000-0000-4000-8000-000000000011','Natalia Pabón','natalia.pabon@ejemplo.co',null,'3167778899','1000000011','54','54874',100,4.9,6,true,true),
+('a0000000-0000-4000-8000-000000000012','Camila Ortega','camila.ortega@ejemplo.co',null,'3178889900','1000000012','68','68001',100,4.7,5,true,true),
+('a0000000-0000-4000-8000-000000000013','Felipe Arango','felipe.arango@ejemplo.co',null,'3189990011','1000000013','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000020','Luis Gómez','luis.gomez@ejemplo.co','img/luis.jpg','3170024680','1000000020','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000021','Diego Martínez','diego.martinez@ejemplo.co',null,'3170025914','1000000021','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000022','Sofía Herrera','sofia.herrera@ejemplo.co',null,'3170027148','1000000022','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000023','Camilo Rojas','camilo.rojas@ejemplo.co',null,'3170028382','1000000023','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000024','Valentina Díaz','valentina.diaz@ejemplo.co',null,'3170029616','1000000024','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000025','Jorge Pérez','jorge.perez@ejemplo.co',null,'3170030850','1000000025','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000026','Marta Ruiz','marta.ruiz@ejemplo.co',null,'3170032084','1000000026','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000027','Felipe Castro','felipe.castro@ejemplo.co',null,'3170033318','1000000027','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000028','Natalia Gil','natalia.gil@ejemplo.co',null,'3170034552','1000000028','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000029','Esteban Mora','esteban.mora@ejemplo.co',null,'3170035786','1000000029','05','05001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000030','Ricardo León','ricardo.leon@ejemplo.co',null,'3170037020','1000000030','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000031','Andrea Ortiz','andrea.ortiz@ejemplo.co',null,'3170038254','1000000031','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000032','Hernán Quintero','hernan.quintero@ejemplo.co',null,'3170039488','1000000032','05','05440',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000033','Paula Vargas','paula.vargas@ejemplo.co',null,'3170040722','1000000033','05','05266',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000034','Mauricio Silva','mauricio.silva@ejemplo.co',null,'3170041956','1000000034','05','05001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000040','Jhon Jairo Peñaranda','jhon.penaranda@ejemplo.co',null,'3170049360','1000000040','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000041','Mónica Rangel','monica.rangel@ejemplo.co',null,'3170050594','1000000041','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000042','Luis Fernando Ibarra','luis.ibarra@ejemplo.co',null,'3170051828','1000000042','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000043','Yesica Duarte','yesica.duarte@ejemplo.co',null,'3170053062','1000000043','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000044','Alexander Contreras','alexander.contreras@ejemplo.co',null,'3170054296','1000000044','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000045','Wilmer Galvis','wilmer.galvis@ejemplo.co',null,'3170055530','1000000045','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000046','Karen Villamizar','karen.villamizar@ejemplo.co',null,'3170056764','1000000046','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000047','Daniel Sanabria','daniel.sanabria@ejemplo.co',null,'3170057998','1000000047','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000048','Sergio Pabón','sergio.pabon@ejemplo.co',null,'3170059232','1000000048','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000049','Laura Jácome','laura.jacome@ejemplo.co',null,'3170060466','1000000049','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000050','Edwin Ramírez','edwin.ramirez@ejemplo.co',null,'3170061700','1000000050','54','54874',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000051','Claudia Moreno','claudia.moreno@ejemplo.co',null,'3170062934','1000000051','54','54405',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000052','Gustavo Parada','gustavo.parada@ejemplo.co',null,'3170064168','1000000052','54','54518',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000053','Ana Milena Quintero','ana.quintero@ejemplo.co',null,'3170065402','1000000053','54','54498',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000060','Julián Serrano','julian.serrano@ejemplo.co',null,'3170074040','1000000060','68','68001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000061','Diana Gómez','diana.gomez@ejemplo.co',null,'3170075274','1000000061','68','68001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000062','Fabián Ardila','fabian.ardila@ejemplo.co',null,'3170076508','1000000062','68','68276',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000070','Carolina Méndez','carolina.mendez@ejemplo.co',null,'3170086380','1000000070','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000071','Andrés Felipe Rojas','andres.rojas@ejemplo.co',null,'3170087614','1000000071','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000072','Óscar Beltrán','oscar.beltran@ejemplo.co',null,'3170088848','1000000072','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000073','Yuliana Mosquera','yuliana.mosquera@ejemplo.co',null,'3170090082','1000000073','76','76001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000074','Rafael Barrios','rafael.barrios@ejemplo.co',null,'3170091316','1000000074','08','08001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000075','Kelly Julio','kelly.julio@ejemplo.co',null,'3170092550','1000000075','13','13001',100,4.8,3,true,true)
+on conflict (id) do update set nombre = excluded.nombre, foto = excluded.foto, departamento = excluded.departamento, municipio = excluded.municipio;
+
+insert into proveedores (id, perfil_id, empresa, profesion, departamento, municipio, lat, lng, cobertura_km, dias, hora_desde, hora_hasta, precio_min, precio_max, descripcion, ofrece, telefono, calificacion, num_resenas, completados, verificado, calificacion_ini, resenas_ini, completados_ini) values
+('b0000000-0000-4000-8000-000000000002','a0000000-0000-4000-8000-000000000002','Ramírez Plomería','Técnico en plomería','05','05615',6.163239,-75.366472,20,'{1,2,3,4,5,6}',7,18,50000,80000,'Más de 5 años de experiencia en servicios de plomería residencial y comercial.',array['Instalación y reparación de tuberías','Destapado de cañerías','Instalación de grifería','Mantenimiento general']::text[],'300 123 4567',4.8,32,28,true,4.8,32,28),
+('b0000000-0000-4000-8000-000000000004','a0000000-0000-4000-8000-000000000004','Torres Soluciones','Plomero y electricista','05','05615',6.167761,-75.388156,15,'{0,1,2,3,4,5,6}',6,21,40000,70000,'Electricista certificado RETIE y plomero. Atiendo urgencias todos los días.',array['Instalación de lámparas','Revisión de redes eléctricas','Reparación de fugas','Cambio de breakers']::text[],'301 555 0101',4.7,28,41,true,4.7,28,41),
+('b0000000-0000-4000-8000-000000000020','a0000000-0000-4000-8000-000000000020','LG Mantenimientos','Maestro de obra','05','05615',6.138821,-75.352016,12,'{1,2,3,4,5,6}',13,22,60000,90000,'Pintura, acabados y plomería. Trabajo limpio y garantizado.',array['Pintura de interiores','Estuco y acabados','Reparación de tuberías']::text[],'317 002 4680',4.6,15,19,true,4.6,15,19),
+('b0000000-0000-4000-8000-000000000021','a0000000-0000-4000-8000-000000000021','Frío Express','Técnico en refrigeración','05','05615',6.174996,-75.363761,25,'{1,2,3,4,5,6}',8,18,80000,150000,'Instalación y mantenimiento de aires acondicionados de todas las marcas.',array['Mantenimiento preventivo','Instalación de equipos','Recarga de gas']::text[],'317 002 5914',4.9,41,57,true,4.9,41,57),
+('b0000000-0000-4000-8000-000000000022','a0000000-0000-4000-8000-000000000022','Sofi Estilo a Domicilio','Estilista profesional','05','05615',6.146961,-75.379121,10,'{1,2,3,4,5,6}',9,19,25000,60000,'Cortes, color y peinados a domicilio. Llevo todos mis implementos esterilizados.',array['Corte de cabello dama y caballero','Tintes y mechas','Peinados para eventos']::text[],'317 002 7148',4.9,63,112,true,4.9,63,112),
+('b0000000-0000-4000-8000-000000000023','a0000000-0000-4000-8000-000000000023','TecnoFix','Técnico en sistemas','05','05615',6.183136,-75.370989,15,'{1,2,3,4,5}',8,20,40000,120000,'Formateo, cambio de pantallas, limpieza y repotenciación de equipos.',array['Formateo e instalación de programas','Cambio de pantalla','Limpieza interna']::text[],'317 002 8382',4.7,22,35,true,4.7,22,35),
+('b0000000-0000-4000-8000-000000000024','a0000000-0000-4000-8000-000000000024','Paseos Felices','Cuidadora de mascotas','05','05615',6.151483,-75.393577,6,'{0,1,2,3,4,5,6}',6,19,15000,30000,'Amo los perros. Paseos de 1 hora con reporte por foto.',array['Paseo individual','Paseo grupal','Cuidado por días']::text[],'317 002 9616',4.8,30,88,true,4.8,30,88),
+('b0000000-0000-4000-8000-000000000025','a0000000-0000-4000-8000-000000000025','Electro JP','Electricista','05','05615',6.164144,-75.342077,18,'{1,2,3,4,5,6}',7,17,45000,85000,'Instalaciones eléctricas residenciales.',array['Instalación de tomas','Lámparas','Tableros']::text[],'317 003 0850',4.5,12,14,false,4.5,12,14),
+('b0000000-0000-4000-8000-000000000026','a0000000-0000-4000-8000-000000000026','Brillo Total','Servicios de limpieza','05','05615',6.177709,-75.382735,12,'{1,2,3,4,5,6}',7,16,60000,110000,'Limpieza profunda de casas y apartamentos.',array['Limpieza general','Limpieza profunda','Post-obra']::text[],'317 003 2084',4.6,25,47,true,4.6,25,47),
+('b0000000-0000-4000-8000-000000000027','a0000000-0000-4000-8000-000000000027','Trasteos Castro','Transportador','05','05615',6.131586,-75.335752,40,'{0,1,2,3,4,5,6}',6,20,120000,350000,'Camión 3.5 t para trasteos locales y nacionales.',array['Trasteos','Fletes','Conductor elegido']::text[],'317 003 3318',4.4,18,52,true,4.4,18,52),
+('b0000000-0000-4000-8000-000000000028','a0000000-0000-4000-8000-000000000028','Cuidar+','Auxiliar de enfermería','05','05615',6.128873,-75.365568,15,'{0,1,2,3,4,5,6}',0,24,50000,120000,'Cuidado de adultos mayores, curaciones y toma de signos vitales.',array['Acompañamiento','Curaciones','Aplicación de medicamentos']::text[],'317 003 4552',4.9,34,76,true,4.9,34,76),
+('b0000000-0000-4000-8000-000000000029','a0000000-0000-4000-8000-000000000029','Mora Pinturas','Pintor','05','05001',6.287771,-75.531592,10,'{1,2,3,4,5,6}',7,17,50000,90000,'Pintura de fachadas e interiores en Medellín.',array['Pintura de interiores','Fachadas']::text[],'317 003 5786',4.3,9,11,true,4.3,9,11),
+('b0000000-0000-4000-8000-000000000030','a0000000-0000-4000-8000-000000000030','Construye RL','Maestro de construcción','05','05615',6.172283,-75.401709,25,'{1,2,3,4,5,6}',7,17,70000,200000,'Remodelaciones, enchapes y obra blanca.',array['Enchapes','Muros y pañetes','Remodelaciones']::text[],'317 003 7020',4.6,20,39,true,4.6,20,39),
+('b0000000-0000-4000-8000-000000000031','a0000000-0000-4000-8000-000000000031','VetCasa','Médica veterinaria','05','05615',6.158717,-75.357437,20,'{1,2,3,4,5,6}',8,18,60000,140000,'Consulta veterinaria, vacunación y desparasitación a domicilio.',array['Consulta general','Vacunación','Desparasitación']::text[],'317 003 8254',4.9,27,64,true,4.9,27,64),
+('b0000000-0000-4000-8000-000000000032','a0000000-0000-4000-8000-000000000032','Transportes HQ','Conductor','05','05440',6.200904,-75.298193,25,'{0,1,2,3,4,5,6}',6,22,60000,200000,'Conductor elegido y acarreos en el Oriente antioqueño.',array['Conductor elegido','Acarreos']::text[],'317 003 9488',4.6,16,33,true,4.6,16,33),
+('b0000000-0000-4000-8000-000000000033','a0000000-0000-4000-8000-000000000033','Nails by Pau','Manicurista','05','05266',6.174864,-75.562985,12,'{1,2,3,4,5,6}',9,19,25000,70000,'Manicure, pedicure y uñas acrílicas a domicilio.',array['Manicure tradicional','Semipermanente','Uñas acrílicas']::text[],'317 004 0722',4.8,40,95,true,4.8,40,95),
+('b0000000-0000-4000-8000-000000000034','a0000000-0000-4000-8000-000000000034','CelularMed','Técnico en celulares','05','05001',6.295006,-75.538822,15,'{1,2,3,4,5,6}',9,19,30000,150000,'Reparación de celulares y computadores con garantía.',array['Cambio de pantallas','Baterías','Software']::text[],'317 004 1956',4.5,21,44,true,4.5,21,44),
+('b0000000-0000-4000-8000-000000000040','a0000000-0000-4000-8000-000000000040','Plomería JJ','Plomero','54','54001',7.901135,-72.502359,15,'{1,2,3,4,5,6}',7,19,40000,75000,'Plomero con 10 años de experiencia en Cúcuta y su área metropolitana.',array['Fugas y goteos','Destapes','Instalación de tanques']::text[],'317 004 9360',4.7,26,61,true,4.7,26,61),
+('b0000000-0000-4000-8000-000000000041','a0000000-0000-4000-8000-000000000041','Mónica Estilistas','Estilista','54','54001',7.896613,-72.515962,10,'{1,2,3,4,5,6}',8,19,20000,55000,'Peluquería y manicure a domicilio en Cúcuta.',array['Cortes','Cepillados','Manicure']::text[],'317 005 0594',4.9,48,130,true,4.9,48,130),
+('b0000000-0000-4000-8000-000000000042','a0000000-0000-4000-8000-000000000042','Electro Ibarra','Electricista','54','54001',7.888474,-72.495103,18,'{1,2,3,4,5,6}',7,18,45000,90000,'Instalaciones y reparaciones eléctricas certificadas.',array['Tableros','Iluminación','Revisión de cortos']::text[],'317 005 1828',4.6,19,37,true,4.6,19,37),
+('b0000000-0000-4000-8000-000000000043','a0000000-0000-4000-8000-000000000043','Limpieza Total Cúcuta','Servicios de limpieza','54','54001',7.883952,-72.518683,12,'{1,2,3,4,5,6}',7,17,50000,100000,'Aseo de casas, apartamentos y oficinas.',array['Aseo general','Limpieza profunda','Oficinas']::text[],'317 005 3062',4.7,31,58,true,4.7,31,58),
+('b0000000-0000-4000-8000-000000000044','a0000000-0000-4000-8000-000000000044','FrioCúcuta','Técnico en aire acondicionado','54','54001',7.90837,-72.505079,20,'{1,2,3,4,5,6}',7,18,70000,160000,'En Cúcuta el aire es vital: mantenimiento e instalación el mismo día.',array['Mantenimiento','Instalación','Carga de gas']::text[],'317 005 4296',4.8,37,89,true,4.8,37,89),
+('b0000000-0000-4000-8000-000000000045','a0000000-0000-4000-8000-000000000045','Obras Galvis','Maestro de obra','54','54001',7.902039,-72.488755,25,'{1,2,3,4,5,6}',7,17,60000,220000,'Remodelaciones, pintura y obra blanca.',array['Pintura','Enchapes','Drywall']::text[],'317 005 5530',4.5,14,22,true,4.5,14,22),
+('b0000000-0000-4000-8000-000000000046','a0000000-0000-4000-8000-000000000046','Cuidados Karen','Enfermera','54','54001',7.877621,-72.511428,15,'{0,1,2,3,4,5,6}',0,24,60000,130000,'Enfermera profesional: curaciones, inyectología y acompañamiento.',array['Curaciones','Inyectología','Acompañamiento nocturno']::text[],'317 005 6764',4.9,22,40,true,4.9,22,40),
+('b0000000-0000-4000-8000-000000000047','a0000000-0000-4000-8000-000000000047','TecnoNorte','Técnico en sistemas','54','54001',7.892091,-72.499638,15,'{1,2,3,4,5}',8,19,35000,120000,'Soporte técnico a domicilio y reparación de equipos.',array['Formateo','Redes WiFi','Cambio de pantalla']::text[],'317 005 7998',4.6,17,29,true,4.6,17,29),
+('b0000000-0000-4000-8000-000000000048','a0000000-0000-4000-8000-000000000048','Trasteos del Norte','Transportador','54','54001',7.911987,-72.480593,40,'{0,1,2,3,4,5,6}',6,20,100000,400000,'Trasteos en Cúcuta, Villa del Rosario y Los Patios.',array['Trasteos','Fletes','Conductor elegido']::text[],'317 005 9232',4.4,11,25,true,4.4,11,25),
+('b0000000-0000-4000-8000-000000000049','a0000000-0000-4000-8000-000000000049','PetCare Cúcuta','Veterinaria','54','54001',7.900231,-72.523217,15,'{1,2,3,4,5,6}',8,18,30000,120000,'Consulta veterinaria y paseo de mascotas.',array['Consulta','Vacunación','Paseos']::text[],'317 006 0466',4.8,20,33,true,4.8,20,33),
+('b0000000-0000-4000-8000-000000000050','a0000000-0000-4000-8000-000000000050','ER Servicios','Plomero y electricista','54','54874',7.836602,-72.472353,15,'{0,1,2,3,4,5,6}',7,20,35000,70000,'Plomería y electricidad en Villa del Rosario y Cúcuta.',array['Fugas','Tomas e interruptores','Duchas eléctricas']::text[],'317 006 1700',4.5,13,21,true,4.5,13,21),
+('b0000000-0000-4000-8000-000000000051','a0000000-0000-4000-8000-000000000051','Hogar Brillante','Servicios de limpieza','54','54405',7.839238,-72.512427,12,'{1,2,3,4,5,6}',7,16,45000,90000,'Limpieza de hogares en Los Patios.',array['Aseo general','Planchado']::text[],'317 006 2934',4.6,15,18,true,4.6,15,18),
+('b0000000-0000-4000-8000-000000000052','a0000000-0000-4000-8000-000000000052','Pinturas Parada','Pintor','54','54518',7.379864,-72.6525,15,'{1,2,3,4,5,6}',7,17,50000,120000,'Pintura de casas en Pamplona.',array['Interiores','Fachadas']::text[],'317 006 4168',4.7,12,16,true,4.7,12,16),
+('b0000000-0000-4000-8000-000000000053','a0000000-0000-4000-8000-000000000053','Belleza Ocaña','Estilista','54','54498',8.249096,-73.299092,10,'{1,2,3,4,5,6}',8,18,20000,50000,'Cortes y peinados a domicilio en Ocaña.',array['Cortes','Peinados']::text[],'317 006 5402',4.8,19,27,true,4.8,19,27),
+('b0000000-0000-4000-8000-000000000060','a0000000-0000-4000-8000-000000000060','Hidro Santander','Plomero','68','68001',7.135148,-73.121307,15,'{1,2,3,4,5,6}',7,18,45000,85000,'Plomería en Bucaramanga y Floridablanca.',array['Fugas','Calentadores','Destapes']::text[],'317 007 4040',4.7,24,42,true,4.7,24,42),
+('b0000000-0000-4000-8000-000000000061','a0000000-0000-4000-8000-000000000061','Diana Beauty','Estilista','68','68001',7.131531,-73.13217,10,'{1,2,3,4,5,6}',9,19,25000,70000,'Belleza a domicilio en Bucaramanga.',array['Cortes','Manicure','Maquillaje']::text[],'317 007 5274',4.9,33,70,true,4.9,33,70),
+('b0000000-0000-4000-8000-000000000062','a0000000-0000-4000-8000-000000000062','Clima Ardila','Técnico en refrigeración','68','68276',7.065627,-73.087007,20,'{1,2,3,4,5,6}',8,18,60000,150000,'Aires acondicionados y electricidad en el área metropolitana.',array['Mantenimiento de aires','Instalaciones eléctricas']::text[],'317 007 6508',4.6,18,31,true,4.6,18,31),
+('b0000000-0000-4000-8000-000000000070','a0000000-0000-4000-8000-000000000070','Casa Impecable','Servicios de limpieza','11','11001',4.627787,-74.072688,15,'{1,2,3,4,5,6}',7,17,70000,130000,'Aseo de apartamentos en Bogotá.',array['Aseo general','Limpieza profunda']::text[],'317 008 6380',4.8,52,120,true,4.8,52,120),
+('b0000000-0000-4000-8000-000000000071','a0000000-0000-4000-8000-000000000071','SoporteBogotá','Ingeniero de sistemas','11','11001',4.636831,-74.095218,20,'{1,2,3,4,5}',8,19,50000,150000,'Soporte técnico a domicilio en Bogotá.',array['Formateo','Redes','Recuperación de datos']::text[],'317 008 7614',4.7,29,66,true,4.7,29,66),
+('b0000000-0000-4000-8000-000000000072','a0000000-0000-4000-8000-000000000072','Plomería Capital','Plomero','11','11001',4.600656,-74.059169,20,'{1,2,3,4,5,6}',7,18,50000,95000,'Plomero en el norte y centro de Bogotá.',array['Fugas','Calentadores','Destapes']::text[],'317 008 8848',4.5,16,30,true,4.5,16,30),
+('b0000000-0000-4000-8000-000000000073','a0000000-0000-4000-8000-000000000073','Yuli Trenzas','Estilista','76','76001',3.44084,-76.5198,12,'{1,2,3,4,5,6}',9,19,25000,80000,'Trenzas, cortes y peinados en Cali.',array['Trenzas','Cortes','Peinados']::text[],'317 009 0082',4.9,44,98,true,4.9,44,98),
+('b0000000-0000-4000-8000-000000000074','a0000000-0000-4000-8000-000000000074','Brisa Fría','Técnico en aire acondicionado','08','08001',10.965698,-74.792729,20,'{1,2,3,4,5,6}',7,19,70000,170000,'Aires acondicionados en Barranquilla.',array['Mantenimiento','Instalación']::text[],'317 009 1316',4.7,38,85,true,4.7,38,85),
+('b0000000-0000-4000-8000-000000000075','a0000000-0000-4000-8000-000000000075','Kelly Nails','Manicurista','13','13001',10.400627,-75.513531,10,'{1,2,3,4,5,6}',9,19,25000,60000,'Manicure y pedicure en Cartagena.',array['Manicure','Pedicure']::text[],'317 009 2550',4.8,26,61,true,4.8,26,61)
+on conflict (id) do nothing;
+
+insert into proveedor_servicios (proveedor_id, servicio_id) values
+('b0000000-0000-4000-8000-000000000002','plomeria'),
+('b0000000-0000-4000-8000-000000000004','plomeria'),
+('b0000000-0000-4000-8000-000000000004','electricidad'),
+('b0000000-0000-4000-8000-000000000020','plomeria'),
+('b0000000-0000-4000-8000-000000000020','pintura'),
+('b0000000-0000-4000-8000-000000000021','aire'),
+('b0000000-0000-4000-8000-000000000022','peluqueria'),
+('b0000000-0000-4000-8000-000000000022','manicure'),
+('b0000000-0000-4000-8000-000000000023','computadores'),
+('b0000000-0000-4000-8000-000000000023','celulares'),
+('b0000000-0000-4000-8000-000000000024','paseo'),
+('b0000000-0000-4000-8000-000000000025','electricidad'),
+('b0000000-0000-4000-8000-000000000026','limpieza'),
+('b0000000-0000-4000-8000-000000000027','mudanzas'),
+('b0000000-0000-4000-8000-000000000027','conductor'),
+('b0000000-0000-4000-8000-000000000028','enfermeria'),
+('b0000000-0000-4000-8000-000000000029','pintura'),
+('b0000000-0000-4000-8000-000000000030','albanileria'),
+('b0000000-0000-4000-8000-000000000030','pintura'),
+('b0000000-0000-4000-8000-000000000031','veterinaria'),
+('b0000000-0000-4000-8000-000000000032','conductor'),
+('b0000000-0000-4000-8000-000000000032','mudanzas'),
+('b0000000-0000-4000-8000-000000000033','manicure'),
+('b0000000-0000-4000-8000-000000000033','peluqueria'),
+('b0000000-0000-4000-8000-000000000034','celulares'),
+('b0000000-0000-4000-8000-000000000034','computadores'),
+('b0000000-0000-4000-8000-000000000040','plomeria'),
+('b0000000-0000-4000-8000-000000000041','peluqueria'),
+('b0000000-0000-4000-8000-000000000041','manicure'),
+('b0000000-0000-4000-8000-000000000042','electricidad'),
+('b0000000-0000-4000-8000-000000000043','limpieza'),
+('b0000000-0000-4000-8000-000000000044','aire'),
+('b0000000-0000-4000-8000-000000000045','albanileria'),
+('b0000000-0000-4000-8000-000000000045','pintura'),
+('b0000000-0000-4000-8000-000000000046','enfermeria'),
+('b0000000-0000-4000-8000-000000000047','computadores'),
+('b0000000-0000-4000-8000-000000000047','celulares'),
+('b0000000-0000-4000-8000-000000000048','mudanzas'),
+('b0000000-0000-4000-8000-000000000048','conductor'),
+('b0000000-0000-4000-8000-000000000049','veterinaria'),
+('b0000000-0000-4000-8000-000000000049','paseo'),
+('b0000000-0000-4000-8000-000000000050','plomeria'),
+('b0000000-0000-4000-8000-000000000050','electricidad'),
+('b0000000-0000-4000-8000-000000000051','limpieza'),
+('b0000000-0000-4000-8000-000000000052','pintura'),
+('b0000000-0000-4000-8000-000000000053','peluqueria'),
+('b0000000-0000-4000-8000-000000000060','plomeria'),
+('b0000000-0000-4000-8000-000000000061','peluqueria'),
+('b0000000-0000-4000-8000-000000000061','manicure'),
+('b0000000-0000-4000-8000-000000000062','aire'),
+('b0000000-0000-4000-8000-000000000062','electricidad'),
+('b0000000-0000-4000-8000-000000000070','limpieza'),
+('b0000000-0000-4000-8000-000000000071','computadores'),
+('b0000000-0000-4000-8000-000000000072','plomeria'),
+('b0000000-0000-4000-8000-000000000073','peluqueria'),
+('b0000000-0000-4000-8000-000000000074','aire'),
+('b0000000-0000-4000-8000-000000000075','manicure')
+on conflict do nothing;
+
+delete from portafolio where proveedor_id in (select p.id from proveedores p join perfiles pe on pe.id = p.perfil_id where pe.demo);
+
+insert into portafolio (proveedor_id, imagen, orden) values
+('b0000000-0000-4000-8000-000000000002','img/port1.jpg',0),
+('b0000000-0000-4000-8000-000000000002','img/port2.jpg',1),
+('b0000000-0000-4000-8000-000000000002','img/port3.jpg',2),
+('b0000000-0000-4000-8000-000000000004','img/sol2.jpg',0),
+('b0000000-0000-4000-8000-000000000004','img/electricidad.jpg',1),
+('b0000000-0000-4000-8000-000000000004','img/port2.jpg',2),
+('b0000000-0000-4000-8000-000000000020','img/pintura.jpg',0),
+('b0000000-0000-4000-8000-000000000020','img/sol3.jpg',1),
+('b0000000-0000-4000-8000-000000000020','img/port3.jpg',2),
+('b0000000-0000-4000-8000-000000000021','img/aire.jpg',0),
+('b0000000-0000-4000-8000-000000000021','img/sol4.jpg',1),
+('b0000000-0000-4000-8000-000000000025','img/electricidad.jpg',0),
+('b0000000-0000-4000-8000-000000000029','img/pintura.jpg',0),
+('b0000000-0000-4000-8000-000000000040','img/plomeria.jpg',0),
+('b0000000-0000-4000-8000-000000000042','img/electricidad.jpg',0),
+('b0000000-0000-4000-8000-000000000044','img/aire.jpg',0),
+('b0000000-0000-4000-8000-000000000045','img/pintura.jpg',0),
+('b0000000-0000-4000-8000-000000000060','img/plomeria.jpg',0),
+('b0000000-0000-4000-8000-000000000062','img/aire.jpg',0),
+('b0000000-0000-4000-8000-000000000072','img/plomeria.jpg',0),
+('b0000000-0000-4000-8000-000000000074','img/aire.jpg',0);
+
+delete from trueque_ofertas where perfil_id in (select id from perfiles where demo);
+
+insert into trueque_ofertas (perfil_id, ofrece, necesita, nota) values
+('a0000000-0000-4000-8000-000000000023','computadores','paseo','Arreglo tu computador si paseas a mi perro Toby 2 veces.'),
+('a0000000-0000-4000-8000-000000000024','paseo','computadores','Paseo a tu perro a cambio de formatear mi portátil.'),
+('a0000000-0000-4000-8000-000000000022','peluqueria','pintura','Corte de cabello a cambio de pintar mi local.'),
+('a0000000-0000-4000-8000-000000000020','pintura','peluqueria','Pinto una habitación a cambio de cortes para mi familia.'),
+('a0000000-0000-4000-8000-000000000004','electricidad','limpieza','Instalo lámparas a cambio de una limpieza profunda.'),
+('a0000000-0000-4000-8000-000000000026','limpieza','electricidad','Limpio tu casa a cambio de revisar mi instalación eléctrica.'),
+('a0000000-0000-4000-8000-000000000047','computadores','mudanzas','Reparo tu computador a cambio de un acarreo pequeño.'),
+('a0000000-0000-4000-8000-000000000048','mudanzas','computadores','Te hago un flete a cambio de formatear dos computadores.'),
+('a0000000-0000-4000-8000-000000000041','peluqueria','limpieza','Cortes para toda la familia a cambio de un aseo general.');
+
+-- =====================================================================
+--  Datos de ejemplo de solicitudes, acuerdos, chats y notificaciones.
+--  cp_sembrar_demo() borra y vuelve a crear SOLO los datos de las
+--  personas de ejemplo (perfiles.demo = true). Nunca toca usuarios reales.
+-- =====================================================================
+create or replace function cp_demo_sol(
+  p_id uuid, p_cliente uuid, p_titulo text, p_desc text, p_servicio text, p_muni text, p_este double precision, p_norte double precision,
+  p_pago text, p_creado timestamptz, p_estado text, p_proveedor uuid default null, p_foto text default null, p_final timestamptz default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare m municipios;
+begin
+  select * into m from municipios where codigo = p_muni;
+  insert into solicitudes (id, cliente_id, titulo, descripcion, servicio_id, departamento, municipio, lat, lng, metodo_pago,
+                           estado, proveedor_id, foto, creado, finalizado)
+  values (p_id, p_cliente, p_titulo, p_desc, p_servicio, m.departamento, p_muni,
+          m.lat + p_norte / 110.574, m.lng + p_este / (111.32 * cos(radians(m.lat))),
+          p_pago, p_estado, p_proveedor, coalesce(p_foto, (select foto from servicios where id = p_servicio)), p_creado, p_final);
+  if p_estado = 'buscando' then
+    insert into solicitud_notificados (solicitud_id, proveedor_id, distancia_km)
+    select p_id, x.proveedor_id, round(x.distancia::numeric, 2)
+    from solicitudes s, cp_match(p_servicio, s.lat, s.lng, p_cliente) x where s.id = p_id;
+  end if;
+end $$;
+
+create or replace function cp_sembrar_demo() returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  hoy date := (now() at time zone 'America/Bogota')::date;
+  -- perfiles
+  dani uuid := 'a0000000-0000-4000-8000-000000000001'; carlos uuid := 'a0000000-0000-4000-8000-000000000002';
+  juan uuid := 'a0000000-0000-4000-8000-000000000003'; andres uuid := 'a0000000-0000-4000-8000-000000000004';
+  maria uuid := 'a0000000-0000-4000-8000-000000000005'; santiago uuid := 'a0000000-0000-4000-8000-000000000006';
+  laura uuid := 'a0000000-0000-4000-8000-000000000007'; pedro uuid := 'a0000000-0000-4000-8000-000000000008';
+  valeria uuid := 'a0000000-0000-4000-8000-000000000009'; oscar uuid := 'a0000000-0000-4000-8000-000000000010';
+  nataliap uuid := 'a0000000-0000-4000-8000-000000000011'; camila uuid := 'a0000000-0000-4000-8000-000000000012';
+  felipe uuid := 'a0000000-0000-4000-8000-000000000013'; sofia_pe uuid := 'a0000000-0000-4000-8000-000000000022';
+  -- proveedores
+  v_carlos uuid := 'b0000000-0000-4000-8000-000000000002'; v_andres uuid := 'b0000000-0000-4000-8000-000000000004';
+  v_luis uuid := 'b0000000-0000-4000-8000-000000000020'; v_diego uuid := 'b0000000-0000-4000-8000-000000000021';
+  v_sofia uuid := 'b0000000-0000-4000-8000-000000000022';
+  c_dc uuid; c_mc uuid; c_da uuid; c_ds uuid;
+  k int;
+  t timestamptz;
+begin
+  -- 1. Limpia los datos transaccionales de las personas de ejemplo
+  delete from solicitudes where cliente_id in (select id from perfiles where demo);
+  delete from conversaciones where usuario_a in (select id from perfiles where demo) and usuario_b in (select id from perfiles where demo);
+  delete from notificaciones where perfil_id in (select id from perfiles where demo);
+  delete from faltas where perfil_id in (select id from perfiles where demo);
+  delete from canjes where perfil_id in (select id from perfiles where demo);
+  delete from direcciones where perfil_id in (select id from perfiles where demo);
+  delete from metodos_pago where perfil_id in (select id from perfiles where demo);
+  update proveedores set calificacion = calificacion_ini, num_resenas = resenas_ini, completados = completados_ini, activo = true
+   where calificacion_ini is not null;
+  update perfiles set puntos = case id when dani then 320 when carlos then 540 when juan then 180 when andres then 410 else 100 end,
+         rol_activo = case when id in (carlos, andres) then 'proveedor' else 'cliente' end
+   where demo;
+
+  -- 2. Historial de Daniela
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000001', dani, 'Reparación de fuga de agua',
+    'Necesito reparar una tubería rota, se presenta una fuga de agua en la cocina.', 'plomeria', '05615', 0, 0, 'efectivo',
+    (hoy + time '08:15') at time zone 'America/Bogota', 'en_curso', v_carlos, 'img/sol1.jpg');
+  insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde) values
+    ('c0000000-0000-4000-8000-000000000001', v_carlos, 60000, (hoy + time '08:17') at time zone 'America/Bogota'),
+    ('c0000000-0000-4000-8000-000000000001', v_andres, 55000, (hoy + time '08:19') at time zone 'America/Bogota');
+  insert into acuerdos (solicitud_id, codigo, fecha, hora, precio, firmado) values
+    ('c0000000-0000-4000-8000-000000000001', 'CP-2026-0481', hoy, '15:00', 60000, (hoy + time '11:40') at time zone 'America/Bogota');
+
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000002', dani, 'Instalación de lámparas', 'Instalar 3 lámparas de techo en la sala.',
+    'electricidad', '05615', 0, 0, 'transferencia', now() - interval '9 days', 'completada', v_andres, 'img/sol2.jpg', now() - interval '8 days');
+  insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde) values ('c0000000-0000-4000-8000-000000000002', v_andres, 70000, now() - interval '9 days');
+  insert into acuerdos (solicitud_id, codigo, fecha, hora, precio, firmado) values ('c0000000-0000-4000-8000-000000000002', 'CP-2026-0412', hoy - 8, '14:00', 70000, now() - interval '9 days');
+  insert into calificaciones (solicitud_id, autor_id, rol_autor, estrellas, comentario, creado) values
+    ('c0000000-0000-4000-8000-000000000002', dani, 'cliente', 5, 'Instaló las lámparas en menos de una hora. Muy amable.', now() - interval '8 days'),
+    ('c0000000-0000-4000-8000-000000000002', andres, 'proveedor', 5, 'Clienta muy puntual con el pago.', now() - interval '8 days');
+
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000003', dani, 'Pintura de habitación', 'Pintar habitación principal de 12 m².',
+    'pintura', '05615', 0, 0, 'nequi', now() - interval '17 days', 'cancelada', v_luis, 'img/sol3.jpg', now() - interval '15 days');
+
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000004', dani, 'Mantenimiento aire acond.', 'Mantenimiento preventivo de aire acondicionado de 12.000 BTU.',
+    'aire', '05615', 0, 0, 'tarjeta', now() - interval '29 days', 'completada', v_diego, 'img/sol4.jpg', now() - interval '28 days');
+  insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde) values ('c0000000-0000-4000-8000-000000000004', v_diego, 90000, now() - interval '29 days');
+  insert into acuerdos (solicitud_id, codigo, fecha, hora, precio, firmado) values ('c0000000-0000-4000-8000-000000000004', 'CP-2026-0377', hoy - 28, '10:00', 90000, now() - interval '29 days');
+  insert into calificaciones (solicitud_id, autor_id, rol_autor, estrellas, comentario, creado) values
+    ('c0000000-0000-4000-8000-000000000004', dani, 'cliente', 5, 'Muy ordenado y explicó todo.', now() - interval '28 days');
+
+  -- Rutina: corte de cabello aproximadamente cada mes (alimenta la IA predictiva)
+  k := 0;
+  foreach t in array array[now() - interval '92 days', now() - interval '61 days', now() - interval '31 days'] loop
+    k := k + 1;
+    perform cp_demo_sol(('c0000000-0000-4000-8000-00000000010' || k)::uuid, dani, 'Corte de cabello', 'Corte y cepillado a domicilio.',
+      'peluqueria', '05615', 0, 0, 'nequi', t - interval '1 day', 'completada', v_sofia, null, t);
+    insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde) values (('c0000000-0000-4000-8000-00000000010' || k)::uuid, v_sofia, 35000, t - interval '1 day');
+    insert into acuerdos (solicitud_id, codigo, fecha, hora, precio, firmado) values (('c0000000-0000-4000-8000-00000000010' || k)::uuid, 'CP-2026-021' || k, (t at time zone 'America/Bogota')::date, '11:00', 35000, t - interval '1 day');
+    insert into calificaciones (solicitud_id, autor_id, rol_autor, estrellas, comentario, creado) values (('c0000000-0000-4000-8000-00000000010' || k)::uuid, dani, 'cliente', 5, 'Siempre excelente.', t);
+  end loop;
+
+  -- 3. Solicitudes abiertas (oportunidades para proveedores)
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000011', maria, 'Fuga de agua en la cocina', 'Necesito reparar una fuga de agua en la cocina.', 'plomeria', '05615', 1.6, 1.8, 'efectivo', now() - interval '5 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000012', juan, 'Instalación de lámparas', 'Instalación de lámparas en apartamento.', 'electricidad', '05615', -0.5, 3.0, 'transferencia', now() - interval '18 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000013', santiago, 'Pintar habitación', 'Pintar habitación de 12 m².', 'pintura', '05615', 2.2, -0.4, 'nequi', now() - interval '25 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000014', laura, 'Cambio de grifería', 'Cambio de grifería del lavamanos y revisión del sanitario que gotea.', 'plomeria', '05615', -1.1, 0.2, 'tarjeta', now() - interval '48 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000015', pedro, 'Destapar cañería', 'Destapar cañería del baño principal, es urgente.', 'plomeria', '05615', 3.1, 2.4, 'efectivo', now() - interval '95 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000016', laura, 'Mantenimiento de aires', 'Mantenimiento de 2 aires acondicionados en local comercial.', 'aire', '05615', 0.4, 1.2, 'transferencia', now() - interval '70 minutes', 'buscando');
+  -- Cúcuta y área metropolitana
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000021', valeria, 'Fuga en el baño', 'Se sale el agua por la base del sanitario, necesito plomero hoy.', 'plomeria', '54001', 0.4, 0.5, 'efectivo', now() - interval '12 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000022', oscar, 'Revisión eléctrica', 'Se botan los breakers cuando prendo el aire. Necesito revisión.', 'electricidad', '54001', 1.0, -0.4, 'nequi', now() - interval '40 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000023', nataliap, 'Corte y cepillado', 'Corte y cepillado a domicilio para el sábado.', 'peluqueria', '54874', 0.1, 0.2, 'efectivo', now() - interval '2 hours', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000024', valeria, 'Mantenimiento de aire', 'Mantenimiento de aire acondicionado de 18.000 BTU.', 'aire', '54001', 0.4, 0.5, 'transferencia', now() - interval '3 hours', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000025', oscar, 'Aseo general', 'Aseo general de apartamento de 3 habitaciones.', 'limpieza', '54001', 1.0, -0.4, 'efectivo', now() - interval '5 hours', 'buscando');
+  -- Otras ciudades
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000031', camila, 'Aire no enfría', 'El aire acondicionado no enfría, posible falta de gas.', 'aire', '68001', 0.2, 0.3, 'tarjeta', now() - interval '30 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000032', felipe, 'Portátil lento', 'Mi portátil está muy lento, necesito formateo y limpieza.', 'computadores', '11001', -1.0, 2.0, 'transferencia', now() - interval '50 minutes', 'buscando');
+
+  -- Trabajo en curso de Carlos con María
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000017', maria, 'Revisión de tubería del patio', 'Hay humedad en la pared del patio, posible tubería rota.', 'plomeria', '05615', 1.6, 1.8, 'efectivo', now() - interval '1 day', 'en_curso', v_carlos);
+  insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde) values ('c0000000-0000-4000-8000-000000000017', v_carlos, 75000, now() - interval '1 day');
+  insert into acuerdos (solicitud_id, codigo, fecha, hora, precio, firmado) values ('c0000000-0000-4000-8000-000000000017', 'CP-2026-0479', hoy + 1, '09:00', 75000, now() - interval '1 day');
+
+  -- 4. Conversaciones
+  c_dc := cp_conversacion(dani, carlos);
+  insert into mensajes (conversacion_id, autor_id, texto, imagen, creado) values
+    (c_dc, dani, 'Hola, buenas tardes, necesito que me repares una tubería en la cocina, ¿cuándo tienes disponibilidad?', null, (hoy + time '11:32') at time zone 'America/Bogota'),
+    (c_dc, carlos, 'Sí, claro. ¿Me puedes enviar una foto de la fuga?', null, (hoy + time '11:33') at time zone 'America/Bogota'),
+    (c_dc, dani, null, 'img/fuga.jpg', (hoy + time '11:34') at time zone 'America/Bogota'),
+    (c_dc, carlos, 'Perfecto, puede ser que sea una unión. Te confirmo que puedo ir mañana en la mañana.', null, (hoy + time '11:37') at time zone 'America/Bogota'),
+    (c_dc, dani, 'Listo, perfecto. ¿A qué hora podrías?', null, (hoy + time '11:38') at time zone 'America/Bogota');
+  insert into lecturas values (c_dc, dani, (hoy + time '11:38') at time zone 'America/Bogota'), (c_dc, carlos, (hoy + time '11:37') at time zone 'America/Bogota')
+    on conflict (conversacion_id, perfil_id) do update set leido_hasta = excluded.leido_hasta;
+  c_mc := cp_conversacion(maria, carlos);
+  insert into mensajes (conversacion_id, autor_id, texto, creado) values
+    (c_mc, maria, 'Carlos, ¿mañana a las 9:00 a.m. sigue en pie?', now() - interval '3 hours'),
+    (c_mc, carlos, 'Sí señora, allá estaré puntual.', now() - interval '170 minutes');
+  insert into lecturas values (c_mc, carlos, now()) on conflict (conversacion_id, perfil_id) do update set leido_hasta = excluded.leido_hasta;
+  c_da := cp_conversacion(dani, andres);
+  insert into mensajes (conversacion_id, autor_id, texto, creado) values (c_da, andres, '¡Gracias por la calificación, Daniela! Quedo atento para lo que necesites.', now() - interval '8 days');
+  insert into lecturas values (c_da, dani, now()) on conflict (conversacion_id, perfil_id) do update set leido_hasta = excluded.leido_hasta;
+  c_ds := cp_conversacion(dani, sofia_pe);
+  insert into mensajes (conversacion_id, autor_id, texto, creado) values (c_ds, sofia_pe, 'Hola Dani, cuando quieras agendamos tu próximo corte 💇‍♀️', now() - interval '30 days');
+  insert into lecturas values (c_ds, dani, now()) on conflict (conversacion_id, perfil_id) do update set leido_hasta = excluded.leido_hasta;
+
+  -- 5. Notificaciones
+  insert into notificaciones (perfil_id, tipo, texto, enlace, leida, creado) values
+    (dani, 'agreement', 'Carlos Ramírez confirmó el acuerdo: Reparación de fuga de agua, hoy 3:00 p.m.', '/solicitud/c0000000-0000-4000-8000-000000000001', false, (hoy + time '11:40') at time zone 'America/Bogota'),
+    (dani, 'message', 'Carlos: Perfecto, puede ser que sea una unión.', '/chat/' || c_dc, false, (hoy + time '11:37') at time zone 'America/Bogota'),
+    (dani, 'rating', '¡Ganaste 50 puntos ConectaPRO por calificar tu servicio de electricidad!', '/perfil/beneficios', true, now() - interval '8 days'),
+    (carlos, 'match', 'Nueva oportunidad de plomería a 1.2 km: "Fuga de agua en la cocina"', '/oportunidad/c0000000-0000-4000-8000-000000000011', false, now() - interval '5 minutes'),
+    (carlos, 'agreement', 'Daniela Jaramillo confirmó el acuerdo digital CP-2026-0481', '/trabajo/c0000000-0000-4000-8000-000000000001', false, (hoy + time '11:40') at time zone 'America/Bogota'),
+    (juan, 'match', 'Notificamos a los proveedores compatibles para "Instalación de lámparas"', '/proveedores/c0000000-0000-4000-8000-000000000012', true, now() - interval '18 minutes'),
+    (andres, 'match', 'Nueva oportunidad de electricidad: "Instalación de lámparas"', '/oportunidad/c0000000-0000-4000-8000-000000000012', false, now() - interval '18 minutes');
+
+  -- 6. Direcciones y métodos de pago de Daniela
+  insert into direcciones (perfil_id, nombre, direccion, departamento, municipio) values
+    (dani, 'Casa', 'Cra. 50 #45-20', '05', '05615'), (dani, 'Oficina', 'Calle 49 #50-12', '05', '05615');
+  insert into metodos_pago (perfil_id, tipo, detalle, predeterminado) values
+    (dani, 'efectivo', 'Pago al finalizar el servicio', true), (dani, 'nequi', '•••• 6543', false), (dani, 'tarjeta', 'Visa •••• 4821', false);
+end $$;
+
+-- Reiniciar la demostración (solo lo pueden hacer las cuentas de ejemplo)
+create or replace function api_reiniciar_demo() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from perfiles where id = cp_req() and demo) then
+    raise exception 'Solo las cuentas de demostración pueden reiniciar los datos de ejemplo';
+  end if;
+  perform cp_sembrar_demo();
+end $$;
+revoke execute on function cp_sembrar_demo(), cp_demo_sol(uuid, uuid, text, text, text, text, double precision, double precision, text, timestamptz, text, uuid, text, timestamptz) from public, anon, authenticated;
+grant execute on function api_reiniciar_demo() to authenticated;
+
+select cp_sembrar_demo();
+
+commit;

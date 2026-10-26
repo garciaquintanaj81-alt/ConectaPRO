@@ -139,7 +139,7 @@ function Sidebar() {
         <Link to="/perfil/ayuda" className="flex items-center gap-3 px-4 py-2 text-sm font-semibold text-ink-soft hover:text-ink">
           <LuLifeBuoy className="h-5 w-5" /> Ayuda y soporte
         </Link>
-        {account && <div className="px-4 text-[11px] text-ink-soft/80">Prototipo académico · UDES 2026</div>}
+        {account && <div className="px-4 text-[11px] text-ink-soft/80">Proyecto académico · UDES 2026</div>}
       </div>
     </aside>
   );

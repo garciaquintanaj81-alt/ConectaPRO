@@ -9,7 +9,10 @@ import { AppShell } from "../Layout";
 import { useStore } from "../store";
 import { Link, goBack, navigate } from "../router";
 import { Avatar, Badge, Button, Chip, Empty, Field, Modal, PageHeader, Toggle, clock, cx, inputCls, timeAgo, SERVICE_ICON } from "../ui";
-import { CITIES, SERVICES, ServiceId, serviceById } from "../data";
+import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, serviceById } from "../data";
+import { UbicacionSelect } from "../geo";
+import { useBusy } from "../store";
+import { rpc } from "../api";
 
 // =====================================================================
 //  Mensajes: lista (móvil) / dos paneles (computador)
@@ -55,7 +58,7 @@ export function Messages({ activeId }: { activeId?: string }) {
             <h1 className="mb-4 text-2xl font-extrabold">Mensajes</h1>
             {list}
           </div>
-          {active ? <ChatPanel convId={active.id} /> : <Empty icon={LuMessageCircleMore} title="Conversación no encontrada" />}
+          {active ? <ChatPanel convId={active.id} /> : <div className="card h-96 animate-pulse" />}
         </div>
       </AppShell>
     );
@@ -72,29 +75,25 @@ export function Messages({ activeId }: { activeId?: string }) {
 }
 
 function ChatPanel({ convId }: { convId: string }) {
-  const { chats, sendMessage, markConversationRead, toast, getProvider } = useStore();
+  const { chats, sendMessage, markConversationRead, toast } = useStore();
   const c = chats.find((x) => x.id === convId)!;
   const [text, setText] = useState("");
-  const [typing, setTyping] = useState(false);
+  const [sending, setSending] = useState(false);
+  const typing = false;
   const scroller = useRef<HTMLDivElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const count = c.messages.length;
 
   useEffect(() => { if (c.unread) markConversationRead(c.id); }, [count]);
   useEffect(() => { const el = scroller.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); }, [count, typing]);
-  useEffect(() => {
-    const last = c.messages.at(-1);
-    if (last?.from === "me" && Date.now() - last.at < 3000) { setTyping(true); const t = setTimeout(() => setTyping(false), 1700); return () => clearTimeout(t); }
-    setTyping(false);
-  }, [count]);
-
-  const send = (e?: React.FormEvent) => {
+  const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!text.trim()) return;
-    sendMessage(c.id, { text: text.trim() });
-    setText("");
+    const t = text.trim();
+    if (!t || sending) return;
+    setSending(true); setText("");
+    try { await sendMessage(c.id, { text: t }); } catch { setText(t); } finally { setSending(false); }
   };
-  const provider = getProvider(c.peerKey);
+  const provider = c.peerRole !== "Cliente" ? { id: c.peerKey } : null;
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-surface lg:static lg:z-auto lg:card lg:h-[calc(100vh-150px)] lg:overflow-hidden">
@@ -102,10 +101,10 @@ function ChatPanel({ convId }: { convId: string }) {
         <button onClick={() => goBack("/mensajes")} className="rounded-full p-1.5 hover:bg-surface lg:hidden" aria-label="Volver"><LuArrowLeft className="h-7 w-7" /></button>
         <Link to={provider ? "/proveedor/" + provider.id : "#"} className="flex min-w-0 flex-1 items-center gap-3">
           <Avatar name={c.peerName} photo={c.peerPhoto} size={52} dot="on" />
-          <div className="min-w-0"><div className="truncate text-lg font-extrabold">{c.peerName}</div><div className="text-sm text-ink-soft">{typing ? "Escribiendo…" : "En línea"}</div></div>
+          <div className="min-w-0"><div className="truncate text-lg font-extrabold">{c.peerName}</div><div className="text-sm text-ink-soft">{c.peerRole}</div></div>
         </Link>
-        <button onClick={() => toast("Llamada de voz (simulada)")} className="rounded-full p-2.5 text-brand-blue hover:bg-brand-50" aria-label="Llamar"><LuPhone className="h-6 w-6 fill-brand-blue" /></button>
-        <button onClick={() => toast("Videollamada (simulada)")} className="rounded-full p-2.5 text-brand hover:bg-brand-50" aria-label="Videollamada"><LuVideo className="h-7 w-7 fill-brand" /></button>
+        <button onClick={() => toast("Las llamadas por la app estarán disponibles próximamente")} className="rounded-full p-2.5 text-brand-blue hover:bg-brand-50" aria-label="Llamar"><LuPhone className="h-6 w-6 fill-brand-blue" /></button>
+        <button onClick={() => toast("Las videollamadas estarán disponibles próximamente")} className="rounded-full p-2.5 text-brand hover:bg-brand-50" aria-label="Videollamada"><LuVideo className="h-7 w-7 fill-brand" /></button>
       </header>
 
       <div ref={scroller} className="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
@@ -140,7 +139,7 @@ function ChatPanel({ convId }: { convId: string }) {
         {text.trim() ? (
           <button type="submit" aria-label="Enviar" className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-gradient text-white shadow-brand"><LuSend className="h-5 w-5" /></button>
         ) : (
-          <button type="button" onClick={() => toast("Nota de voz (simulada)")} aria-label="Nota de voz" className="text-brand"><LuMic className="h-8 w-8" /></button>
+          <button type="button" onClick={() => toast("Las notas de voz estarán disponibles próximamente")} aria-label="Nota de voz" className="text-brand"><LuMic className="h-8 w-8" /></button>
         )}
         <input ref={file} type="file" accept="image/*" hidden onChange={(e) => {
           const f = e.target.files?.[0]; if (!f) return;
@@ -180,9 +179,9 @@ export function Profile() {
     [LuLifeBuoy, "Ayuda y soporte", "/perfil/ayuda"],
   ] as [any, string, string][];
 
-  const switchMode = () => {
+  const switchMode = async () => {
     if (mode === "cliente" && !myProvider) return navigate("/mi-servicio");
-    setMode(mode === "cliente" ? "proveedor" : "cliente");
+    await setMode(mode === "cliente" ? "proveedor" : "cliente");
     toast(`Ahora estás en modo ${mode === "cliente" ? "proveedor" : "cliente"}`);
     navigate("/inicio");
   };
@@ -225,7 +224,7 @@ export function Profile() {
         <p className="text-ink-soft">Podrás volver a ingresar cuando quieras.</p>
         <div className="mt-5 grid grid-cols-2 gap-3">
           <Button variant="outline" onClick={() => setConfirmOut(false)}>Cancelar</Button>
-          <Button variant="dark" onClick={() => { logout(); navigate("/", true); }}>Cerrar sesión</Button>
+          <Button variant="dark" onClick={() => logout().then(() => navigate("/", true))}>Cerrar sesión</Button>
         </div>
       </Modal>
     </AppShell>
@@ -256,64 +255,139 @@ export function ProfileSection({ section }: { section: string }) {
 
 function PersonalInfo() {
   const { account, updateAccount, toast } = useStore();
-  const [f, setF] = useState({ name: account!.name, email: account!.email, phone: account!.phone, city: account!.city });
+  const [f, setF] = useState({ name: account!.name, phone: account!.phone, photo: account!.photo ?? "" });
+  const [ubic, setUbic] = useState({ departamento: account!.departamento ?? "", municipio: account!.municipio ?? "" });
+  const [busy, wrap] = useBusy();
+  const file = useRef<HTMLInputElement>(null);
+  const save = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ubic.municipio) return toast("Selecciona tu departamento y municipio");
+    wrap(async () => {
+      await updateAccount({ name: f.name, phone: f.phone.replace(/\D/g, ""), photo: f.photo || undefined, ...ubic } as any);
+      toast("Datos guardados");
+    });
+  };
   return (
-    <form className="card space-y-4 p-6" onSubmit={(e) => { e.preventDefault(); updateAccount(f); toast("Datos actualizados"); }}>
-      <Field label="Nombre completo"><input className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+    <form className="card space-y-4 p-6" onSubmit={save}>
+      <div className="flex items-center gap-4">
+        <Avatar name={f.name} photo={f.photo || undefined} size={80} />
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="soft" className="px-4 py-2.5 text-sm" onClick={() => file.current?.click()}>Cambiar foto</Button>
+          {f.photo && <Button type="button" variant="ghost" className="px-3 py-2.5 text-sm" onClick={() => setF({ ...f, photo: "" })}>Quitar</Button>}
+        </div>
+        <input ref={file} type="file" accept="image/*" hidden onChange={async (e) => {
+          const fl = e.target.files?.[0]; if (!fl) return;
+          setF({ ...f, photo: await toDataUrl(fl, 320) }); e.target.value = "";
+        }} />
+      </div>
+      <Field label="Nombre completo"><input name="nombre" className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       <Field label="Documento (no editable)"><input className={cx(inputCls, "text-ink-soft")} value={account!.document} readOnly /></Field>
-      <Field label="Correo electrónico"><input className={inputCls} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
-      <Field label="Celular"><input className={inputCls} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
-      <Field label="Ciudad"><select className={inputCls} value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })}>{CITIES.map((c) => <option key={c}>{c}</option>)}</select></Field>
-      <Button type="submit" className="w-full">Guardar cambios</Button>
+      <Field label="Correo electrónico (no editable)"><input className={cx(inputCls, "text-ink-soft")} value={account!.email} readOnly /></Field>
+      <Field label="Celular"><input name="celular" inputMode="numeric" className={inputCls} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
+      <UbicacionSelect value={ubic} onChange={setUbic} />
+      <Button type="submit" disabled={busy} className="w-full">{busy ? "Guardando…" : "Guardar cambios"}</Button>
     </form>
   );
 }
 
+/** Convierte una imagen a JPEG reducido (para guardarla en la base de datos) */
+export function toDataUrl(file: File, max = 600): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = reject;
+    r.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas"); cv.width = img.width * k; cv.height = img.height * k;
+        cv.getContext("2d")!.drawImage(img, 0, 0, cv.width, cv.height);
+        resolve(cv.toDataURL("image/jpeg", 0.78));
+      };
+      img.src = r.result as string;
+    };
+    r.readAsDataURL(file);
+  });
+}
+
+const PAY_ICON: Record<PaymentMethod, any> = { efectivo: LuBanknote, nequi: LuWallet, transferencia: LuArrowLeftRight, tarjeta: LuCreditCard };
 function Payments() {
-  const { toast } = useStore();
-  const [list, setList] = useState([
-    { icon: LuBanknote, name: "Efectivo", sub: "Pago al finalizar el servicio", def: true },
-    { icon: LuWallet, name: "Nequi", sub: "•••• 6543" },
-    { icon: LuCreditCard, name: "Tarjeta débito", sub: "Visa •••• 4821" },
-  ]);
+  const { payMethods, savePayment, defaultPayment, deletePayment, toast } = useStore();
+  const [tipo, setTipo] = useState<PaymentMethod>("nequi");
+  const [detalle, setDetalle] = useState("");
+  const [busy, wrap] = useBusy();
   return (
     <div className="space-y-3">
-      {list.map((m, i) => (
-        <div key={m.name} className="card flex items-center gap-4 p-4">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-50 text-brand"><m.icon className="h-6 w-6" /></span>
-          <div className="flex-1"><div className="font-bold">{m.name}</div><div className="text-sm text-ink-soft">{m.sub}</div></div>
-          {m.def ? <Badge tone="ok">Predeterminado</Badge> : <button onClick={() => setList(list.map((x, k) => ({ ...x, def: k === i })))} className="text-sm font-semibold text-brand">Usar</button>}
-        </div>
-      ))}
-      <Button variant="soft" icon={LuPlus} className="w-full" onClick={() => toast("Pasarela de pagos disponible en la versión final")}>Agregar método de pago</Button>
+      {payMethods.length === 0 && <p className="card p-5 text-center text-ink-soft">Aún no tienes métodos de pago guardados.</p>}
+      {payMethods.map((m) => {
+        const I = PAY_ICON[m.type];
+        return (
+          <div key={m.id} className="card flex items-center gap-4 p-4">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-50 text-brand"><I className="h-6 w-6" /></span>
+            <div className="min-w-0 flex-1"><div className="font-bold">{PAYMENTS[m.type]}</div><div className="truncate text-sm text-ink-soft">{m.detail || "—"}</div></div>
+            {m.default ? <Badge tone="ok">Predeterminado</Badge> : <button onClick={() => wrap(() => defaultPayment(m.id))} className="text-sm font-semibold text-brand">Usar</button>}
+            <button onClick={() => wrap(async () => { await deletePayment(m.id); toast("Método eliminado"); })} aria-label="Eliminar" className="p-2 text-bad"><LuTrash2 className="h-5 w-5" /></button>
+          </div>
+        );
+      })}
+      <form className="card space-y-3 p-4" onSubmit={(e) => { e.preventDefault(); wrap(async () => { await savePayment(tipo, detalle); setDetalle(""); toast("Método de pago guardado"); }); }}>
+        <div className="font-bold">Agregar método de pago</div>
+        <select value={tipo} onChange={(e) => setTipo(e.target.value as PaymentMethod)} className="w-full rounded-xl bg-surface px-4 py-3 outline-none ring-1 ring-line">
+          {(Object.keys(PAYMENTS) as PaymentMethod[]).map((k) => <option key={k} value={k}>{PAYMENTS[k]}</option>)}
+        </select>
+        <input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder={tipo === "tarjeta" ? "Ej. Visa terminada en 4821" : tipo === "efectivo" ? "Ej. Pago al terminar" : "Ej. Número terminado en 6543"} className="w-full rounded-xl bg-surface px-4 py-3 outline-none ring-1 ring-line" />
+        <p className="text-xs text-ink-soft">Por seguridad no guardes números completos de tarjetas ni cuentas.</p>
+        <Button type="submit" disabled={busy} className="w-full" icon={LuPlus}>Guardar método</Button>
+      </form>
     </div>
   );
 }
 
 function Addresses() {
-  const [list, setList] = useState([{ n: "Casa", a: "Cra. 50 #45-20, Rionegro" }, { n: "Oficina", a: "Calle 49 #50-12, Rionegro" }]);
-  const [n, setN] = useState(""); const [a, setA] = useState("");
+  const { addresses, saveAddress, deleteAddress, toast } = useStore();
+  const empty = { id: undefined as string | undefined, name: "", address: "" };
+  const [f, setF] = useState(empty);
+  const [ubic, setUbic] = useState({ departamento: "", municipio: "" });
+  const [busy, wrap] = useBusy();
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!f.name.trim() || !f.address.trim()) return toast("Escribe el nombre y la dirección");
+    if (!ubic.municipio) return toast("Selecciona el departamento y el municipio");
+    wrap(async () => {
+      await saveAddress({ ...f, ...ubic });
+      toast(f.id ? "Dirección actualizada" : "Dirección guardada");
+      setF(empty); setUbic({ departamento: "", municipio: "" });
+    });
+  };
   return (
     <div className="space-y-3">
-      {list.map((x, i) => (
-        <div key={i} className="card flex items-center gap-4 p-4">
+      {addresses.length === 0 && <p className="card p-5 text-center text-ink-soft">Aún no tienes direcciones guardadas.</p>}
+      {addresses.map((x) => (
+        <div key={x.id} className="card flex items-center gap-4 p-4">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-50 text-brand"><LuMapPin className="h-6 w-6" /></span>
-          <div className="flex-1"><div className="font-bold">{x.n}</div><div className="text-sm text-ink-soft">{x.a}</div></div>
-          <button onClick={() => setList(list.filter((_, k) => k !== i))} aria-label="Eliminar" className="p-2 text-bad"><LuTrash2 className="h-5 w-5" /></button>
+          <div className="min-w-0 flex-1"><div className="font-bold">{x.name}</div><div className="text-sm text-ink-soft">{x.address} · {x.label}</div></div>
+          <button onClick={() => { setF({ id: x.id, name: x.name, address: x.address }); setUbic({ departamento: x.departamento, municipio: x.municipio }); window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }); }} className="text-sm font-semibold text-brand">Editar</button>
+          <button onClick={() => wrap(async () => { await deleteAddress(x.id); toast("Dirección eliminada"); })} aria-label="Eliminar" className="p-2 text-bad"><LuTrash2 className="h-5 w-5" /></button>
         </div>
       ))}
-      <form className="card space-y-3 p-4" onSubmit={(e) => { e.preventDefault(); if (n && a) { setList([...list, { n, a }]); setN(""); setA(""); } }}>
-        <div className="font-bold">Nueva dirección</div>
-        <input value={n} onChange={(e) => setN(e.target.value)} placeholder="Nombre (ej. Casa de mamá)" className="w-full rounded-xl bg-surface px-4 py-3 outline-none ring-1 ring-line" />
-        <input value={a} onChange={(e) => setA(e.target.value)} placeholder="Dirección" className="w-full rounded-xl bg-surface px-4 py-3 outline-none ring-1 ring-line" />
-        <Button type="submit" className="w-full">Guardar dirección</Button>
+      <form className="card space-y-3 p-4" onSubmit={submit}>
+        <div className="font-bold">{f.id ? "Editar dirección" : "Nueva dirección"}</div>
+        <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Nombre (ej. Casa de mamá)" className="w-full rounded-xl bg-surface px-4 py-3 outline-none ring-1 ring-line" />
+        <input value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="Dirección (ej. Calle 10 #5-20, barrio Centro)" className="w-full rounded-xl bg-surface px-4 py-3 outline-none ring-1 ring-line" />
+        <UbicacionSelect variant="compact" value={ubic} onChange={setUbic} />
+        <div className="flex gap-2">
+          {f.id && <Button type="button" variant="outline" className="flex-1" onClick={() => { setF(empty); setUbic({ departamento: "", municipio: "" }); }}>Cancelar</Button>}
+          <Button type="submit" disabled={busy} className="flex-1">{f.id ? "Guardar cambios" : "Guardar dirección"}</Button>
+        </div>
       </form>
     </div>
   );
 }
 
 function Security() {
-  const { strikes, reset, toast } = useStore();
+  const { strikes, account, resetDemo, deleteAccount, toast } = useStore();
+  const [confirm, setConfirm] = useState(false);
+  const [busy, wrap] = useBusy();
   return (
     <div className="space-y-4">
       <div className="card p-6">
@@ -322,31 +396,41 @@ function Security() {
           {[0, 1, 2].map((i) => <div key={i} className={cx("h-3 flex-1 rounded-full", i < strikes ? "bg-bad" : "bg-ok-50")} />)}
         </div>
         <p className="mt-2 font-bold">{strikes}/3 faltas graves</p>
-        <p className="mt-2 text-sm text-ink-soft">Una falta grave es no realizar un trabajo acordado (proveedor) o no pagar un servicio recibido (cliente). Al acumular tres, la cuenta podrá ser suspendida definitivamente para proteger la confianza de la comunidad.</p>
+        <p className="mt-2 text-sm text-ink-soft">Una falta grave es no realizar un trabajo acordado (proveedor) o cancelar un acuerdo confirmado (cliente). Al acumular tres, la cuenta queda suspendida para proteger la confianza de la comunidad.</p>
       </div>
       <div className="card space-y-3 p-6">
-        <div className="flex items-center gap-3"><LuBadgeCheck className="h-6 w-6 text-ok" /><div><div className="font-bold">Identidad verificada</div><div className="text-sm text-ink-soft">Reconocimiento facial completado</div></div></div>
+        <div className="flex items-center gap-3"><LuBadgeCheck className="h-6 w-6 text-ok" /><div><div className="font-bold">Identidad verificada</div><div className="text-sm text-ink-soft">Validación facial realizada al registrarte</div></div></div>
         <div className="flex items-center gap-3"><LuShieldCheck className="h-6 w-6 text-brand" /><div><div className="font-bold">Habeas Data</div><div className="text-sm text-ink-soft">Tus datos se tratan conforme a la Ley 1581 de 2012</div></div></div>
-        <Button variant="outline" className="w-full" onClick={() => toast("Te enviamos un correo para cambiar tu contraseña (simulado)")}>Cambiar contraseña</Button>
+        <Button variant="outline" className="w-full" onClick={() => toast("Escribe a soporte@conectapro.co para cambiar tu contraseña")}>Cambiar contraseña</Button>
       </div>
+      {account?.demo && (
+        <div className="card p-6">
+          <div className="font-bold">Datos de ejemplo</div>
+          <p className="mt-1 text-sm text-ink-soft">Esta es una cuenta de demostración. Puedes volver a dejar sus solicitudes, chats y notificaciones como al inicio. Los usuarios reales no se ven afectados.</p>
+          <Button variant="soft" icon={LuRefreshCw} disabled={busy} className="mt-4 w-full" onClick={() => wrap(async () => { await resetDemo(); toast("Datos de ejemplo reiniciados"); })}>Reiniciar datos de ejemplo</Button>
+        </div>
+      )}
       <div className="card p-6">
-        <div className="font-bold">Datos de la demostración</div>
-        <p className="mt-1 text-sm text-ink-soft">Restablece el prototipo a su estado inicial (borra solicitudes, mensajes y cuentas creadas).</p>
-        <Button variant="danger" icon={LuRefreshCw} className="mt-4 w-full" onClick={() => { reset(); navigate("/", true); }}>Restablecer demo</Button>
+        <div className="font-bold text-bad">Eliminar mi cuenta</div>
+        <p className="mt-1 text-sm text-ink-soft">Se borrarán de la base de datos tu perfil, solicitudes, mensajes y demás información.</p>
+        <Button variant="danger" icon={LuTrash2} className="mt-4 w-full" onClick={() => setConfirm(true)}>Eliminar mi cuenta</Button>
       </div>
+      <Modal open={confirm} onClose={() => setConfirm(false)} title="¿Eliminar tu cuenta definitivamente?">
+        <p className="text-ink-soft">Esta acción no se puede deshacer.</p>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <Button variant="outline" onClick={() => setConfirm(false)}>Cancelar</Button>
+          <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await deleteAccount(); navigate("/", true); })}>Eliminar</Button>
+        </div>
+      </Modal>
     </div>
   );
 }
 
-const ALLIES = [
-  { brand: "Homecenter", offer: "10% en herramientas y materiales", cost: 300, color: "bg-[#fff1e0] text-[#c2410c]" },
-  { brand: "Juan Valdez", offer: "Café gratis por tu buena reputación", cost: 150, color: "bg-[#f3eadf] text-[#7c4a1e]" },
-  { brand: "Rappi", offer: "Envío gratis en tu próximo pedido", cost: 200, color: "bg-[#ffe7e3] text-[#e11d48]" },
-  { brand: "Cine Colombia", offer: "2x1 en boletas de lunes a jueves", cost: 400, color: "bg-[#e8ecff] text-brand" },
-];
-
 function Benefits() {
   const { points, redeem, toast } = useStore();
+  const [allies, setAllies] = useState<{ id: number; brand: string; offer: string; cost: number; color: string }[]>([]);
+  const [busy, wrap] = useBusy();
+  useEffect(() => { rpc("api_aliados").then(setAllies).catch(() => setAllies([])); }, []);
   const level = points >= 500 ? "Oro" : points >= 250 ? "Plata" : "Bronce";
   const next = points >= 500 ? null : points >= 250 ? 500 : 250;
   return (
@@ -358,12 +442,12 @@ function Benefits() {
         <p className="mt-4 text-sm opacity-90">Ganas puntos al calificar, cumplir tus acuerdos y mantener buena reputación.</p>
       </div>
       <h2 className="pt-2 text-xl font-extrabold">Beneficios con marcas aliadas</h2>
-      {ALLIES.map((a) => (
-        <div key={a.brand} className="card flex items-center gap-4 p-4">
+      {allies.map((a) => (
+        <div key={a.id} className="card flex items-center gap-4 p-4">
           <span className={cx("flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-lg font-extrabold", a.color)}>{a.brand[0]}</span>
           <div className="flex-1"><div className="font-bold">{a.brand}</div><div className="text-sm text-ink-soft">{a.offer}</div></div>
-          <Button variant={points >= a.cost ? "primary" : "soft"} disabled={points < a.cost} className="px-4 py-2.5 text-sm" icon={LuTicket}
-            onClick={() => { redeem(a.cost); toast(`¡Cupón de ${a.brand} redimido! Código: CP-${Math.random().toString(36).slice(2, 7).toUpperCase()}`); }}>{a.cost}</Button>
+          <Button variant={points >= a.cost ? "primary" : "soft"} disabled={points < a.cost || busy} className="px-4 py-2.5 text-sm" icon={LuTicket}
+            onClick={() => wrap(async () => { const r = await redeem(a.id); toast(`¡Cupón de ${r.brand} redimido! Código: ${r.code}`); })}>{a.cost}</Button>
         </div>
       ))}
       <p className="text-center text-xs text-ink-soft">Marcas mostradas solo como ejemplo de posibles convenios.</p>
@@ -372,8 +456,7 @@ function Benefits() {
 }
 
 function NotifPrefs() {
-  const { account, db, setPrefs, toast } = useStore();
-  const p = db.prefs[account!.id] ?? { push: true, email: true, ia: true };
+  const { prefs: p, setPrefs, toast } = useStore();
   const rows: [keyof typeof p, string, string][] = [
     ["push", "Notificaciones en tiempo real", "Alertas de nuevas oportunidades, postulaciones y mensajes"],
     ["email", "Correo electrónico", "Resumen de acuerdos y contratos digitales"],
@@ -384,7 +467,7 @@ function NotifPrefs() {
       {rows.map(([k, t, d]) => (
         <div key={k} className="flex items-center gap-4 p-5">
           <div className="flex-1"><div className="font-bold">{t}</div><div className="text-sm text-ink-soft">{d}</div></div>
-          <Toggle on={p[k]} onChange={(v) => { setPrefs({ ...p, [k]: v }); toast("Preferencia guardada"); }} label={t} />
+          <Toggle on={p[k]} onChange={(v) => setPrefs({ ...p, [k]: v }).then(() => toast("Preferencia guardada")).catch(() => null)} label={t} />
         </div>
       ))}
     </div>
@@ -441,41 +524,53 @@ export function Notifications() {
 }
 
 // =====================================================================
-//  Match por trueque
+//  Match por trueque (ofertas guardadas en la base de datos)
 // =====================================================================
-const BARTER_USERS = [
-  { name: "Camilo Rojas", photo: undefined, offers: "computadores" as ServiceId, needs: "paseo" as ServiceId, note: "Arreglo tu computador si paseas a mi perro Toby 2 veces." },
-  { name: "Valentina Díaz", photo: undefined, offers: "paseo" as ServiceId, needs: "computadores" as ServiceId, note: "Paseo a tu perro a cambio de formatear mi portátil." },
-  { name: "Sofía Herrera", photo: undefined, offers: "peluqueria" as ServiceId, needs: "pintura" as ServiceId, note: "Corte de cabello a cambio de pintar mi local." },
-  { name: "Luis Gómez", photo: "img/luis.jpg", offers: "pintura" as ServiceId, needs: "peluqueria" as ServiceId, note: "Pinto una habitación a cambio de cortes para mi familia." },
-  { name: "Andrés Torres", photo: "img/andres.jpg", offers: "electricidad" as ServiceId, needs: "limpieza" as ServiceId, note: "Instalo lámparas a cambio de una limpieza profunda." },
-  { name: "Marta Ruiz", photo: undefined, offers: "limpieza" as ServiceId, needs: "electricidad" as ServiceId, note: "Limpio tu casa a cambio de revisar mi instalación eléctrica." },
-];
+interface BarterOffer { id: string; userId: string; name: string; photo?: string; offers: ServiceId; needs: ServiceId; note: string; city: string; perfect: boolean }
 
 export function Barter() {
-  const { openConversation, toast } = useStore();
+  const { openConversation, sendMessage, toast, myBarters, publishBarter, deleteBarter, account } = useStore();
   const [offer, setOffer] = useState<ServiceId>("computadores");
   const [need, setNeed] = useState<ServiceId>("paseo");
-  const matches = useMemo(() => {
-    const perfect = BARTER_USERS.filter((u) => u.offers === need && u.needs === offer);
-    const partial = BARTER_USERS.filter((u) => !perfect.includes(u) && (u.offers === need || u.needs === offer));
-    return { perfect, partial };
-  }, [offer, need]);
+  const [ubic, setUbic] = useState({ departamento: account?.departamento ?? "", municipio: "" });
+  const [list, setList] = useState<BarterOffer[] | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, wrap] = useBusy();
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setList(null);
+    rpc<BarterOffer[]>("api_trueque_buscar", { p_ofrece: offer, p_necesita: need, p_departamento: ubic.departamento || null })
+      .then((r) => alive && setList(r)).catch(() => alive && setList([]));
+    return () => { alive = false; };
+  }, [offer, need, ubic.departamento, reload]);
+
+  const propose = (u: BarterOffer) => wrap(async () => {
+    const id = await openConversation({ user: u.userId });
+    await sendMessage(id, { text: `¡Hola ${u.name.split(" ")[0]}! Vi tu propuesta de trueque. Yo ofrezco ${serviceById(offer).name.toLowerCase()} y necesito ${serviceById(need).name.toLowerCase()}. ¿Hacemos el intercambio?` });
+    toast("¡Propuesta de trueque enviada!");
+    navigate("/chat/" + id);
+  });
+
   const sel = "mt-1 w-full rounded-2xl bg-white px-4 py-3.5 font-normal outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50";
-  const Card = ({ u, perfect }: { u: typeof BARTER_USERS[number]; perfect?: boolean }) => {
+  const perfect = (list ?? []).filter((u) => u.perfect);
+  const partial = (list ?? []).filter((u) => !u.perfect);
+  const Card = ({ u }: { u: BarterOffer }) => {
     const O = SERVICE_ICON[u.offers], N = SERVICE_ICON[u.needs];
     return (
       <div className="card animate-fade-up p-5">
         <div className="flex items-center gap-3">
           <Avatar name={u.name} photo={u.photo} size={52} />
-          <div className="flex-1"><div className="font-extrabold">{u.name}</div>{perfect ? <Badge tone="ok" icon={LuCircleCheck}>Match perfecto</Badge> : <Badge tone="warn">Match parcial</Badge>}</div>
+          <div className="min-w-0 flex-1"><div className="truncate font-extrabold">{u.name}</div><div className="truncate text-xs text-ink-soft">{u.city}</div></div>
+          {u.perfect ? <Badge tone="ok" icon={LuCircleCheck}>Match perfecto</Badge> : <Badge tone="warn">Parcial</Badge>}
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-          <div className="rounded-2xl bg-ok-50 p-3"><div className="text-xs font-bold text-ok">OFRECE</div><div className="mt-1 flex items-center gap-1.5 font-semibold"><O className="h-4 w-4" />{serviceById(u.offers).short}</div></div>
-          <div className="rounded-2xl bg-brand-50 p-3"><div className="text-xs font-bold text-brand">NECESITA</div><div className="mt-1 flex items-center gap-1.5 font-semibold"><N className="h-4 w-4" />{serviceById(u.needs).short}</div></div>
+          <div className="rounded-2xl bg-ok-50 p-3"><div className="text-xs font-bold text-ok">OFRECE</div><div className="mt-1 flex items-center gap-1.5 font-semibold">{O && <O className="h-4 w-4" />}{serviceById(u.offers).short}</div></div>
+          <div className="rounded-2xl bg-brand-50 p-3"><div className="text-xs font-bold text-brand">NECESITA</div><div className="mt-1 flex items-center gap-1.5 font-semibold">{N && <N className="h-4 w-4" />}{serviceById(u.needs).short}</div></div>
         </div>
         <p className="mt-3 text-sm text-ink-soft">“{u.note}”</p>
-        <Button variant={perfect ? "primary" : "soft"} className="mt-4 w-full" icon={LuRepeat} onClick={() => { const id = openConversation("trueque-" + u.name, u.name, "Trueque", u.photo); toast("¡Propuesta de trueque enviada!"); navigate("/chat/" + id); }}>Proponer trueque</Button>
+        <Button variant={u.perfect ? "primary" : "soft"} disabled={busy} className="mt-4 w-full" icon={LuRepeat} onClick={() => propose(u)}>Proponer trueque</Button>
       </div>
     );
   };
@@ -484,18 +579,45 @@ export function Barter() {
       <PageHeader title="Match por trueque" back="/explorar" sub="Intercambia habilidades sin usar dinero" />
       <div className="card grid gap-4 p-5 sm:grid-cols-2">
         <label className="block text-sm font-semibold">Yo ofrezco
-          <select value={offer} onChange={(e) => setOffer(e.target.value as ServiceId)} className={sel}>{SERVICES.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+          <select value={offer} onChange={(e) => setOffer(e.target.value as ServiceId)} className={sel}>{SERVICES.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
         </label>
         <label className="block text-sm font-semibold">Yo necesito
-          <select value={need} onChange={(e) => setNeed(e.target.value as ServiceId)} className={sel}>{SERVICES.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+          <select value={need} onChange={(e) => setNeed(e.target.value as ServiceId)} className={sel}>{SERVICES.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
         </label>
+        <div className="sm:col-span-2"><UbicacionSelect variant="compact" allowAll value={ubic} onChange={(v) => setUbic({ departamento: v.departamento, municipio: "" })} className="[&>label:last-child]:hidden sm:!grid-cols-1" /></div>
       </div>
+
       <h2 className="mb-3 mt-6 text-xl font-extrabold">Personas compatibles</h2>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {matches.perfect.map((u) => <Card key={u.name} u={u} perfect />)}
-        {matches.partial.map((u) => <Card key={u.name} u={u} />)}
+      {list === null ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-56 animate-pulse" />)}</div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {perfect.map((u) => <Card key={u.id} u={u} />)}
+          {partial.map((u) => <Card key={u.id} u={u} />)}
+        </div>
+      )}
+      {list?.length === 0 && <Empty icon={LuRepeat} title="Aún no hay coincidencias" text="Publica tu oferta abajo: cuando alguien compatible la vea podrá escribirte." />}
+
+      <div className="card mt-8 p-5">
+        <h2 className="text-lg font-extrabold">Publica tu oferta de trueque</h2>
+        <p className="text-sm text-ink-soft">Se publicará: ofrezco <b>{serviceById(offer).name.toLowerCase()}</b> y necesito <b>{serviceById(need).name.toLowerCase()}</b>.</p>
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={160} placeholder="Ej. Arreglo tu computador si paseas a mi perro dos veces" className="flex-1 rounded-2xl bg-surface px-4 py-3 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
+          <Button disabled={busy} onClick={() => wrap(async () => { await publishBarter(offer, need, note); setNote(""); setReload((x) => x + 1); toast("Tu oferta de trueque quedó publicada"); })}>Publicar</Button>
+        </div>
+        {myBarters.length > 0 && (
+          <div className="mt-5 space-y-2">
+            <div className="text-sm font-bold text-ink-soft">Mis ofertas publicadas</div>
+            {myBarters.map((b) => (
+              <div key={b.id} className="flex items-center gap-3 rounded-2xl bg-surface p-3 text-sm">
+                <LuRepeat className="h-5 w-5 shrink-0 text-ok" />
+                <div className="min-w-0 flex-1"><b>{serviceById(b.offers).short}</b> ⇄ <b>{serviceById(b.needs).short}</b><div className="truncate text-ink-soft">{b.note}</div></div>
+                <button onClick={() => wrap(async () => { await deleteBarter(b.id); toast("Oferta eliminada"); })} aria-label="Eliminar oferta" className="p-2 text-bad"><LuTrash2 className="h-5 w-5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      {matches.perfect.length + matches.partial.length === 0 && <Empty icon={LuRepeat} title="Aún no hay coincidencias" text="Prueba con otras habilidades. Te avisaremos cuando aparezca alguien compatible." />}
     </AppShell>
   );
 }

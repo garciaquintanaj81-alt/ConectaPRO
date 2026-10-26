@@ -13,8 +13,11 @@ import {
   Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars, Stepper, Toggle,
   CATEGORY_ICON, localISO, PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, clock, cx, shortDate, timeAgo,
 } from "../ui";
-import { BASE, CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById, REVIEWS } from "../data";
-import { availability, availabilityLabel, distanceKm, matchProviders, predictRoutines, scheduleLabel } from "../matching";
+import { CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById } from "../data";
+import { availability, availabilityLabel, distanceKm, predictRoutines, scheduleLabel } from "../matching";
+import { rpc } from "../api";
+import { UbicacionSelect, getMunicipios } from "../geo";
+import { useBusy } from "../store";
 
 const query = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "");
 
@@ -22,19 +25,24 @@ const query = () => new URLSearchParams(window.location.hash.split("?")[1] ?? ""
 //  Inicio (cliente)
 // =====================================================================
 export function ClientHome() {
-  const { account, myRequests, getProvider, db } = useStore();
+  const { account, myRequests, getProvider, prefs } = useStore();
   const [q, setQ] = useState("");
   const [slide, setSlide] = useState(0);
   useEffect(() => { const t = setInterval(() => setSlide((s) => (s + 1) % 3), 4500); return () => clearInterval(t); }, []);
 
-  const prefs = account ? db.prefs[account.id] : undefined;
   const suggestions = useMemo(() => {
     if (prefs && !prefs.ia) return [];
     return predictRoutines(myRequests.filter((r) => r.status === "completada").map((r) => ({ service: r.service, date: r.finishedAt ?? r.createdAt, providerId: r.providerId })));
   }, [myRequests, prefs]);
 
   const active = myRequests.filter((r) => r.status === "en_curso" || r.status === "buscando");
-  const featured = useMemo(() => [...db.customProviders, ...["p1", "p4", "p5", "p2"].map((id) => getProvider(id)!)].filter(Boolean).slice(0, 4), [db.customProviders]);
+  // Proveedores destacados de la ciudad del usuario (consulta a la base de datos)
+  const [featured, setFeatured] = useState<Provider[]>([]);
+  useEffect(() => {
+    if (!account?.municipio) return;
+    rpc<{ resultados: Provider[] }>("api_buscar_proveedores", { p_departamento: account.departamento, p_municipio: account.municipio, p_orden: "rating" })
+      .then((r) => setFeatured(r.resultados.slice(0, 4))).catch(() => setFeatured([]));
+  }, [account?.municipio]);
   const banners = [
     { t: "Conecta con profesionales verificados en tu zona", img: "img/banner_manos.jpg" },
     { t: "Califica tus servicios y gana puntos con marcas aliadas", img: "img/girl.jpg" },
@@ -125,11 +133,12 @@ export function ClientHome() {
             )}
           </div>
           <div>
-            <SectionTitle>Proveedores destacados</SectionTitle>
+            <SectionTitle action={<Link to="/explorar" className="text-sm font-semibold text-brand-violet">Ver más</Link>}>Destacados en {account?.city.split(",")[0]}</SectionTitle>
             <div className="card divide-y divide-line">
+              {featured.length === 0 && <p className="p-5 text-center text-sm text-ink-soft">Aún no hay proveedores registrados en tu municipio.</p>}
               {featured.map((p) => (
                 <Link key={p.id} to={"/proveedor/" + p.id} className="flex items-center gap-3 p-4 hover:bg-surface/60">
-                  <Avatar name={p.name} photo={p.photo} size={48} dot={availability(p.schedule) === "ahora" ? "on" : "away"} />
+                  <Avatar name={p.name} photo={p.photo} size={48} dot={(p.availability ?? availability(p.schedule)) === "ahora" ? "on" : "away"} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-bold">{p.name}</div>
                     <div className="truncate text-sm text-ink-soft">{p.profession}</div>
@@ -167,46 +176,84 @@ function ActiveCard({ r }: { r: Request }) {
 }
 
 // =====================================================================
-//  Explorar proveedores
+//  Explorar proveedores — filtros por departamento y municipio
+//  (cada cambio consulta la base de datos: api_buscar_proveedores)
 // =====================================================================
 export function Explore() {
-  const { allProviders, account, myProvider } = useStore();
+  const { account } = useStore();
   const qp = query();
   const [q, setQ] = useState(qp.get("q") ?? "");
+  const [debouncedQ, setDebouncedQ] = useState(q);
   const [cat, setCat] = useState<CategoryId | "todas">((qp.get("cat") as CategoryId) ?? "todas");
   const [sort, setSort] = useState<"rating" | "distance">("rating");
   const [onlyNow, setOnlyNow] = useState(false);
+  const [ubic, setUbic] = useState({ departamento: qp.get("dep") ?? account?.departamento ?? "", municipio: qp.get("mun") ?? account?.municipio ?? "" });
+  const [data, setData] = useState<{ total: number; referencia: string | null; resultados: Provider[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const list = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return allProviders
-      .filter((p) => p.id !== myProvider?.id)
-      .map((p) => ({ p, d: distanceKm(BASE, p), av: availability(p.schedule) }))
-      .filter(({ p }) => cat === "todas" || cat === "mas" || p.services.some((s) => serviceById(s).category === cat))
-      .filter(({ p }) => !t || [p.name, p.profession, p.company, ...p.services.map((s) => serviceById(s).name)].join(" ").toLowerCase().includes(t))
-      .filter(({ av }) => !onlyNow || av === "ahora")
-      .sort((a, b) => (sort === "rating" ? b.p.rating - a.p.rating : a.d - b.d));
-  }, [q, cat, sort, onlyNow, allProviders]);
+  useEffect(() => { const t = setTimeout(() => setDebouncedQ(q), 300); return () => clearTimeout(t); }, [q]);
+
+  // Consulta a la base de datos cada vez que cambia un filtro
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError("");
+    rpc<{ total: number; referencia: string | null; resultados: Provider[] }>("api_buscar_proveedores", {
+      p_departamento: ubic.departamento || null, p_municipio: ubic.municipio || null,
+      p_categoria: cat === "todas" ? null : cat, p_texto: debouncedQ.trim() || null, p_solo_ahora: onlyNow, p_orden: sort,
+    })
+      .then((r) => alive && setData(r))
+      .catch((e) => alive && setError(e.message))
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [ubic.departamento, ubic.municipio, cat, debouncedQ, onlyNow, sort]);
+
+  const list = data?.resultados ?? [];
+  const locales = list.filter((p) => p.ubicacion !== "cobertura");
+  const cercanos = list.filter((p) => p.ubicacion === "cobertura");
+  const card = (p: Provider) => (
+    <Link key={p.id} to={"/proveedor/" + p.id} className="card flex gap-4 p-4 transition hover:-translate-y-0.5">
+      <Avatar name={p.name} photo={p.photo} size={72} dot={p.availability === "ahora" ? "on" : "away"} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 font-extrabold">{p.name}{p.verified && <LuBadgeCheck className="h-4 w-4 shrink-0 text-brand" />}</div>
+        <div className="truncate text-sm text-ink-soft">{p.profession} · {p.services.map((x) => serviceById(x).short).join(", ")}</div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <Rating value={p.rating} count={p.reviews} />
+          <span className="inline-flex items-center gap-1 text-ink-soft"><LuMapPin className="h-4 w-4" />{p.city.split(",")[0]}{p.distanceKm != null && ` · ${p.distanceKm} km`}</span>
+        </div>
+        <div className="mt-1 text-sm font-bold">{money(p.priceMin)} - {money(p.priceMax)}</div>
+      </div>
+    </Link>
+  );
 
   return (
     <AppShell>
       <PageHeader title="Explorar servicios" back="/inicio" className="lg:justify-start [&>div]:lg:px-0 [&>div]:lg:text-left [&>button]:lg:hidden" />
-      <div className="flex gap-3">
-        <label className="flex flex-1 items-center gap-3 rounded-2xl bg-white px-5 py-3.5 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50">
-          <LuSearch className="h-5 w-5" />
-          <input autoFocus={!!qp.get("q")} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Plomero, peluquería, mudanza…" className="w-full bg-transparent outline-none" />
-          {q && <button onClick={() => setQ("")} aria-label="Limpiar"><LuX className="h-5 w-5 text-ink-soft" /></button>}
-        </label>
-        <Button variant="outline" onClick={() => setSort(sort === "rating" ? "distance" : "rating")} className="shrink-0 px-4" icon={LuSlidersHorizontal}>
-          <span className="hidden sm:inline">{sort === "rating" ? "Mejor calificados" : "Más cercanos"}</span>
-        </Button>
+      <div className="card space-y-4 p-4 sm:p-5">
+        <div className="flex gap-3">
+          <label className="flex flex-1 items-center gap-3 rounded-2xl bg-surface px-5 py-3.5 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50">
+            <LuSearch className="h-5 w-5" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Plomero, peluquería, mudanza…" className="w-full bg-transparent outline-none" aria-label="Buscar" />
+            {q && <button onClick={() => setQ("")} aria-label="Limpiar"><LuX className="h-5 w-5 text-ink-soft" /></button>}
+          </label>
+          <Button variant="outline" onClick={() => setSort(sort === "rating" ? "distance" : "rating")} className="shrink-0 px-4" icon={LuSlidersHorizontal}>
+            <span className="hidden sm:inline">{sort === "rating" ? "Mejor calificados" : "Más cercanos"}</span>
+          </Button>
+        </div>
+        <UbicacionSelect variant="compact" allowAll value={ubic} onChange={setUbic} />
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none sm:mx-0 sm:flex-wrap sm:px-0">
+          <Chip active={cat === "todas"} onClick={() => setCat("todas")}>Todas</Chip>
+          {CATEGORIES.filter((c) => c.id !== "mas").map((c) => <Chip key={c.id} active={cat === c.id} onClick={() => setCat(c.id)}>{c.name}</Chip>)}
+          <Chip active={onlyNow} onClick={() => setOnlyNow(!onlyNow)}>● Disponible ahora</Chip>
+        </div>
       </div>
-      <div className="-mx-4 mt-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none sm:mx-0 sm:flex-wrap sm:px-0">
-        <Chip active={cat === "todas"} onClick={() => setCat("todas")}>Todas</Chip>
-        {CATEGORIES.filter((c) => c.id !== "mas").map((c) => <Chip key={c.id} active={cat === c.id} onClick={() => setCat(c.id)}>{c.name}</Chip>)}
-        <Chip active={onlyNow} onClick={() => setOnlyNow(!onlyNow)}>● Disponible ahora</Chip>
+
+      <div className="mt-4 flex items-center justify-between gap-3 text-sm text-ink-soft" aria-live="polite">
+        <span data-testid="explorar-total">
+          {loading ? "Buscando en la base de datos…" : error ? "" : `${data?.total ?? 0} proveedor${data?.total === 1 ? "" : "es"} ${data?.referencia ? "en " + data.referencia : "en toda Colombia"}`}
+        </span>
+        {(ubic.departamento || ubic.municipio) && <button className="font-semibold text-brand" onClick={() => setUbic({ departamento: "", municipio: "" })}>Ver todo el país</button>}
       </div>
-      <div className="mt-2 text-sm text-ink-soft">{list.length} proveedores cerca de {account?.city.split(",")[0]}</div>
 
       <Link to="/trueque" className="mt-4 flex items-center gap-4 rounded-3xl bg-gradient-to-r from-[#e8f7f1] to-[#eaf1ff] p-4 ring-1 ring-line">
         <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-ok"><LuRepeat className="h-5 w-5" /></span>
@@ -214,24 +261,27 @@ export function Explore() {
         <LuChevronRight className="h-5 w-5 text-brand" />
       </Link>
 
-      {list.length === 0 ? (
-        <div className="mt-6"><Empty icon={LuSearch} title="Sin resultados" text="Prueba con otra palabra o publica tu solicitud y el algoritmo buscará por ti." action={<Button onClick={() => navigate("/publicar")}>Publicar solicitud</Button>} /></div>
+      {error ? (
+        <div className="mt-6"><Empty icon={LuTriangleAlert} title="No se pudo consultar" text={error} /></div>
+      ) : loading && !data ? (
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-32 animate-pulse" />)}</div>
+      ) : list.length === 0 ? (
+        <div className="mt-6"><Empty icon={LuSearch} title="Sin resultados en esta ubicación" text="Prueba con otro municipio o categoría, o publica tu solicitud y el algoritmo buscará por ti." action={<Button onClick={() => navigate("/publicar")}>Publicar solicitud</Button>} /></div>
       ) : (
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {list.map(({ p, d, av }) => (
-            <Link key={p.id} to={"/proveedor/" + p.id} className="card flex gap-4 p-4 transition hover:-translate-y-0.5">
-              <Avatar name={p.name} photo={p.photo} size={72} dot={av === "ahora" ? "on" : "away"} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 font-extrabold">{p.name}{p.verified && <LuBadgeCheck className="h-4 w-4 text-brand" />}</div>
-                <div className="truncate text-sm text-ink-soft">{p.profession}</div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                  <Rating value={p.rating} count={p.reviews} />
-                  <span className="inline-flex items-center gap-1 text-ink-soft"><LuMapPin className="h-4 w-4" />{d.toFixed(1)} km</span>
-                </div>
-                <div className="mt-1 text-sm font-bold">{money(p.priceMin)} - {money(p.priceMax)}</div>
-              </div>
-            </Link>
-          ))}
+        <div className={cx("transition-opacity", loading && "opacity-60")}>
+          {locales.length > 0 && (
+            <>
+              {ubic.municipio && <h2 className="mb-3 mt-6 text-lg font-extrabold">Ubicados en {data?.referencia?.split(",")[0]} ({locales.length})</h2>}
+              <div className={cx("grid gap-4 md:grid-cols-2 xl:grid-cols-3", !ubic.municipio && "mt-5")} data-testid="explorar-resultados">{locales.map(card)}</div>
+            </>
+          )}
+          {cercanos.length > 0 && (
+            <>
+              <h2 className="mb-1 mt-8 text-lg font-extrabold">También atienden en {data?.referencia?.split(",")[0]} ({cercanos.length})</h2>
+              <p className="mb-3 text-sm text-ink-soft">Proveedores de municipios vecinos cuya zona de cobertura incluye esta ubicación.</p>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{cercanos.map(card)}</div>
+            </>
+          )}
         </div>
       )}
     </AppShell>
@@ -241,50 +291,60 @@ export function Explore() {
 // =====================================================================
 //  Publica tu solicitud
 // =====================================================================
-const SAVED_PLACES = [
-  { label: "Rionegro, Antioquia", sub: "Casa · Cra. 50 #45-20", ...BASE },
-  { label: "Rionegro - Centro", sub: "Oficina · Calle 49 #50-12", lat: BASE.lat + 0.006, lng: BASE.lng + 0.004 },
-  { label: "San Antonio de Pereira", sub: "Casa de mis papás", lat: BASE.lat - 0.02, lng: BASE.lng + 0.01 },
-];
-
 export function Publish() {
-  const { publishRequest, toast, strikes, allProviders } = useStore();
+  const { publishRequest, toast, strikes, account, addresses } = useStore();
   const pre = query().get("servicio") as ServiceId | null;
   const [desc, setDesc] = useState(query().get("desc") ?? "");
   const [service, setService] = useState<ServiceId>(pre ?? "plomeria");
-  const [loc, setLoc] = useState({ ...BASE, label: BASE.label, sub: "Ubicación actual" });
+  const [ubic, setUbic] = useState({ departamento: account?.departamento ?? "", municipio: account?.municipio ?? "" });
+  const [direccion, setDireccion] = useState("");
+  const [gps, setGps] = useState<{ lat: number; lng: number } | null>(null);
   const [payment, setPayment] = useState<PaymentMethod>("efectivo");
   const [proposals, setProposals] = useState(true);
   const [placeModal, setPlaceModal] = useState(false);
   const [locating, setLocating] = useState(false);
-  const [err, setErr] = useState("");
-  const SIcon = SERVICE_ICON[service];
+  const [err, setErr] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<number | null>(null);
+  const [busy, wrap] = useBusy();
+  const SIcon = SERVICE_ICON[service] ?? LuWrench;
 
-  const preview = useMemo(() => matchProviders(service, loc, { includeLater: true, pool: allProviders }).matches.length, [service, loc, allProviders]);
+  // Vista previa del algoritmo (consulta la base de datos)
+  useEffect(() => {
+    if (!ubic.municipio) { setPreview(null); return; }
+    rpc<number>("api_vista_previa", { p_servicio: service, p_municipio: ubic.municipio }).then(setPreview).catch(() => setPreview(null));
+  }, [service, ubic.municipio]);
 
   const useGps = () => {
     if (!navigator.geolocation) return toast("Tu navegador no permite GPS");
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocating(false);
-        const here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        if (distanceKm(here, BASE) > 60) {
-          toast("GPS detectado. Los proveedores de la demo están en Rionegro: usaremos esa zona");
-          setLoc({ ...BASE, label: BASE.label, sub: "Ubicación por GPS (zona demo)" });
-        } else setLoc({ ...here, label: "Mi ubicación actual", sub: `GPS: ${here.lat.toFixed(4)}, ${here.lng.toFixed(4)}` });
+      async (pos) => {
+        try {
+          const here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const m = await rpc<{ codigo: string; nombre: string; departamento: string; departamentoNombre: string }>("api_municipio_cercano", { p_lat: here.lat, p_lng: here.lng });
+          await getMunicipios(m.departamento);
+          setUbic({ departamento: m.departamento, municipio: m.codigo });
+          setGps(here);
+          toast(`Ubicación detectada: ${m.nombre}, ${m.departamentoNombre}`);
+        } catch { toast("No pudimos identificar tu municipio. Elígelo manualmente."); }
+        finally { setLocating(false); }
       },
-      () => { setLocating(false); toast("No pudimos acceder a tu ubicación. Ingrésala manualmente."); },
-      { timeout: 8000 }
+      () => { setLocating(false); toast("No pudimos acceder a tu ubicación. Elige el departamento y municipio."); },
+      { timeout: 10000 }
     );
   };
 
-  const submit = () => {
-    if (strikes >= 3) return toast("Tu cuenta está suspendida por acumular 3 faltas graves");
-    if (desc.trim().length < 10) { setErr("Describe tu necesidad (mínimo 10 caracteres)"); return; }
-    const id = publishRequest({ desc: desc.trim(), service, location: { lat: loc.lat, lng: loc.lng, label: loc.label }, payment, wantsProposals: proposals });
-    navigate("/buscando/" + id);
-  };
+  const submit = () => wrap(async () => {
+    if (strikes >= 3) { toast("Tu cuenta está suspendida por acumular 3 faltas graves"); return; }
+    const e: Record<string, string> = {};
+    if (desc.trim().length < 10) e.desc = "Describe tu necesidad (mínimo 10 caracteres)";
+    if (!ubic.departamento) e.departamento = "Selecciona el departamento";
+    if (!ubic.municipio) e.municipio = "Selecciona la ciudad o municipio";
+    setErr(e);
+    if (Object.keys(e).length) return;
+    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, lat: gps?.lat, lng: gps?.lng, direccion, payment, wantsProposals: proposals });
+    navigate("/buscando/" + r.id);
+  });
 
   return (
     <AppShell hideNav>
@@ -294,20 +354,21 @@ export function Publish() {
           <section>
             <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuCircleCheck className="h-7 w-7 fill-ink text-white" /> Descripción del servicio</h2>
             <textarea
+              name="descripcion"
               value={desc}
               maxLength={500}
-              onChange={(e) => { setDesc(e.target.value); setErr(""); }}
+              onChange={(e) => { setDesc(e.target.value); setErr({ ...err, desc: "" }); }}
               placeholder="Ej. Necesito reparar una tubería rota, se presenta una fuga de agua en la cocina..."
-              className={cx("h-32 w-full resize-none rounded-2xl bg-[#eef1fb] p-5 text-[17px] outline-none ring-1 ring-line placeholder:text-ink-soft/80 focus:ring-2 focus:ring-brand/50", err && "ring-2 ring-bad/50")}
+              className={cx("h-32 w-full resize-none rounded-2xl bg-[#eef1fb] p-5 text-[17px] outline-none ring-1 ring-line placeholder:text-ink-soft/80 focus:ring-2 focus:ring-brand/50", err.desc && "ring-2 ring-bad/50")}
             />
-            <div className="flex justify-between text-sm"><span className="font-medium text-bad">{err}</span><span className="text-ink-soft">{desc.length}/500</span></div>
+            <div className="flex justify-between text-sm"><span className="font-medium text-bad">{err.desc}</span><span className="text-ink-soft">{desc.length}/500</span></div>
           </section>
 
           <section>
             <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuUsers className="h-6 w-6" /> Categoría del servicio</h2>
             <label className="relative flex items-center gap-4 rounded-2xl bg-[#eef1fb] px-5 py-4 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50">
               <SIcon className="h-8 w-8 text-brand-blue" />
-              <select value={service} onChange={(e) => setService(e.target.value as ServiceId)} className="w-full appearance-none bg-transparent text-lg outline-none">
+              <select name="servicio" value={service} onChange={(e) => setService(e.target.value as ServiceId)} className="w-full appearance-none bg-transparent text-lg outline-none">
                 {CATEGORIES.filter((c) => c.id !== "mas").map((c) => (
                   <optgroup key={c.id} label={c.name}>
                     {SERVICES.filter((s) => s.category === c.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -320,16 +381,17 @@ export function Publish() {
 
           <section>
             <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuMapPin className="h-6 w-6 fill-ink text-white" /> Ubicación</h2>
-            <MapMock className="h-48 sm:h-56">
+            <MapMock className="h-44 sm:h-52">
               <button onClick={useGps} className="absolute bottom-3 right-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold shadow-md">
                 <LuCircleDot className={cx("h-5 w-5", locating && "animate-spin")} /> {locating ? "Ubicando…" : "Usar mi ubicación"}
               </button>
             </MapMock>
-            <button onClick={() => setPlaceModal(true)} className="mt-3 flex w-full items-center gap-4 rounded-2xl bg-[#eef1fb] px-5 py-4 text-left ring-1 ring-line">
-              <LuMapPin className="h-7 w-7" />
-              <div className="flex-1"><div className="text-sm text-ink-soft">{loc.sub}</div><div className="text-lg font-bold">{loc.label}</div></div>
-              <LuChevronRight className="h-6 w-6" />
-            </button>
+            <UbicacionSelect className="mt-3" value={ubic} onChange={(v) => { setUbic(v); setGps(null); setErr({ ...err, departamento: "", municipio: "" }); }}
+              errors={{ departamento: err.departamento, municipio: err.municipio }} />
+            <div className="mt-3 flex gap-2">
+              <input name="direccion" value={direccion} onChange={(e) => setDireccion(e.target.value)} placeholder="Dirección o barrio (opcional)" className="flex-1 rounded-2xl bg-white px-4 py-3.5 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
+              {addresses.length > 0 && <Button variant="soft" className="shrink-0 px-4" onClick={() => setPlaceModal(true)}>Guardadas</Button>}
+            </div>
           </section>
 
           <section>
@@ -353,7 +415,7 @@ export function Publish() {
             <Toggle on={proposals} onChange={setProposals} label="Quiero recibir propuestas" />
           </section>
 
-          <Button onClick={submit} className="w-full py-[18px] text-xl">Publicar solicitud</Button>
+          <Button onClick={submit} disabled={busy} className="w-full py-[18px] text-xl">{busy ? "Publicando…" : "Publicar solicitud"}</Button>
         </div>
 
         {/* Panel lateral (escritorio) */}
@@ -368,35 +430,26 @@ export function Publish() {
             </ul>
             <div className="mt-5 rounded-2xl bg-brand-50 p-4 text-sm">
               <div className="flex items-center gap-2 font-bold text-brand"><LuRadar className="h-5 w-5" /> Vista previa del algoritmo</div>
-              <p className="mt-1 text-ink-soft"><b className="text-ink">{preview}</b> proveedores de {serviceById(service).name.toLowerCase()} cubren esta ubicación.</p>
+              <p className="mt-1 text-ink-soft">{preview == null ? "Elige el municipio para ver cuántos proveedores te pueden atender." : <><b className="text-ink">{preview}</b> proveedores de {serviceById(service).name.toLowerCase()} cubren esta ubicación.</>}</p>
             </div>
             <img src="img/girl.jpg" alt="" className="mt-5 w-full rounded-2xl" />
           </div>
         </aside>
       </div>
 
-      <Modal open={placeModal} onClose={() => setPlaceModal(false)} title="¿Dónde necesitas el servicio?">
+      <Modal open={placeModal} onClose={() => setPlaceModal(false)} title="Mis direcciones guardadas">
         <div className="space-y-2">
-          {SAVED_PLACES.map((p) => (
-            <button key={p.sub} onClick={() => { setLoc(p); setPlaceModal(false); }} className="flex w-full items-center gap-3 rounded-2xl p-3 text-left ring-1 ring-line hover:bg-surface">
+          {addresses.map((p) => (
+            <button key={p.id} onClick={async () => { await getMunicipios(p.departamento); setUbic({ departamento: p.departamento, municipio: p.municipio }); setDireccion(p.address); setGps(null); setPlaceModal(false); }}
+              className="flex w-full items-center gap-3 rounded-2xl p-3 text-left ring-1 ring-line hover:bg-surface">
               <LuMapPin className="h-6 w-6 text-brand" />
-              <div><div className="font-bold">{p.label}</div><div className="text-sm text-ink-soft">{p.sub}</div></div>
+              <div><div className="font-bold">{p.name}</div><div className="text-sm text-ink-soft">{p.address} · {p.label}</div></div>
             </button>
           ))}
-          <ManualAddress onSave={(label) => { setLoc({ ...BASE, label, sub: "Dirección ingresada" }); setPlaceModal(false); }} />
+          <Link to="/perfil/direcciones" className="block pt-2 text-center text-sm font-semibold text-brand">Administrar direcciones</Link>
         </div>
       </Modal>
     </AppShell>
-  );
-}
-
-function ManualAddress({ onSave }: { onSave: (s: string) => void }) {
-  const [v, setV] = useState("");
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) onSave(v.trim()); }} className="flex gap-2 pt-3">
-      <input value={v} onChange={(e) => setV(e.target.value)} placeholder="Escribe otra dirección" className="flex-1 rounded-2xl bg-surface px-4 py-3 outline-none ring-1 ring-line focus:ring-brand/50" />
-      <Button type="submit" className="px-4 py-3">Usar</Button>
-    </form>
   );
 }
 
@@ -404,15 +457,15 @@ function ManualAddress({ onSave }: { onSave: (s: string) => void }) {
 //  Orquestación: animación del emparejamiento (4 pasos de la arquitectura)
 // =====================================================================
 export function Searching({ id }: { id: string }) {
-  const { db, getProvider, allProviders, visibleApplicants } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, getProvider, visibleApplicants, phase } = useStore();
+  const r = findRequest(id);
   const [stage, setStage] = useState(0);
   useEffect(() => {
     const ts = [700, 1500, 2400, 3300].map((ms, i) => setTimeout(() => setStage(i + 1), ms));
     return () => ts.forEach(clearTimeout);
   }, []);
   if (!r) return <NotFoundReq />;
-  const { trace } = matchProviders(r.service, r.location, { includeLater: true, pool: allProviders });
+  const trace = r.trace ?? { total: 0, byCategory: 0, byCoverage: r.matched.length, bySchedule: r.matched.length };
   const apps = visibleApplicants(r);
   const steps = [
     { icon: LuMapPin, t: "Mapa GPS", d: r.location.label },
@@ -456,7 +509,7 @@ export function Searching({ id }: { id: string }) {
               ) : (
                 <>
                   <div className="flex items-center gap-3">
-                    <div className="flex -space-x-3">{apps.slice(0, 4).map((a) => { const p = getProvider(a.providerId)!; return <Avatar key={a.providerId} name={p.name} photo={p.photo} size={40} />; })}</div>
+                    <div className="flex -space-x-3">{apps.slice(0, 4).map((a) => { const p = getProvider(a.providerId); return p ? <Avatar key={a.providerId} name={p.name} photo={p.photo} size={40} /> : null; })}</div>
                     <div className="font-bold">{apps.length === 0 ? "Esperando respuestas…" : `${apps.length} proveedor${apps.length > 1 ? "es" : ""} aceptaron tu solicitud`}</div>
                   </div>
                   <Button className="mt-4 w-full" icon={LuArrowRight} onClick={() => navigate("/proveedores/" + r.id)}>Ver proveedores compatibles</Button>
@@ -474,15 +527,17 @@ export function Searching({ id }: { id: string }) {
 //  Proveedores compatibles (postulaciones ordenadas por calificación)
 // =====================================================================
 export function CompatibleProviders({ id }: { id: string }) {
-  const { db, getProvider, visibleApplicants } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, getProvider, visibleApplicants } = useStore();
+  const r = findRequest(id);
   const [sort, setSort] = useState<"rating" | "distance">("rating");
   const [nowOnly, setNowOnly] = useState(false);
   if (!r) return <NotFoundReq />;
   const apps = visibleApplicants(r);
   const pending = r.applicants.length - apps.length;
   const rows = apps
-    .map((a) => { const p = getProvider(a.providerId)!; return { a, p, d: distanceKm(r.location, p), av: availability(p.schedule) }; })
+    .map((a) => ({ a, p: getProvider(a.providerId)! }))
+    .filter((x) => x.p)
+    .map(({ a, p }) => ({ a, p, d: distanceKm(r.location, p), av: p.availability ?? availability(p.schedule) }))
     .filter((x) => !nowOnly || x.av === "ahora")
     .sort((x, y) => (sort === "rating" ? y.p.rating - x.p.rating : x.d - y.d));
 
@@ -536,19 +591,27 @@ export function CompatibleProviders({ id }: { id: string }) {
 //  Perfil del proveedor / Selección del proveedor
 // =====================================================================
 export function ProviderProfile({ id }: { id: string }) {
-  const { getProvider, db, openConversation, toast, mode, myProvider } = useStore();
-  const p = getProvider(id);
+  const { getProvider, loadProvider, findRequest, openConversation, toast, mode, myProvider, account } = useStore();
   const sol = query().get("sol");
-  const r = sol ? db.requests.find((x) => x.id === sol) : undefined;
+  const r = sol ? findRequest(sol) : undefined;
   const [tab, setTab] = useState<"info" | "portafolio" | "resenas">(r ? "portafolio" : "info");
   const [phone, setPhone] = useState(false);
-  if (!p) return <AppShell><Empty icon={LuUserRound} title="Proveedor no encontrado" /></AppShell>;
-  const av = availability(p.schedule);
-  const d = distanceKm(r?.location ?? BASE, p);
-  const reviews = REVIEWS[p.id] ?? [];
+  const [full, setFull] = useState<Provider | null>(null);
+  const [state, setState] = useState<"cargando" | "listo" | "error">("cargando");
+  // Datos completos del proveedor (incluye reseñas) desde la base de datos
+  useEffect(() => {
+    setState("cargando");
+    loadProvider(id).then((x) => { setFull(x); setState(x ? "listo" : "error"); }).catch(() => setState("error"));
+  }, [id]);
+  const p = full ?? getProvider(id);
+  if (!p) return <AppShell>{state === "cargando" ? <div className="card mx-auto h-64 max-w-3xl animate-pulse" /> : <Empty icon={LuUserRound} title="Proveedor no encontrado" />}</AppShell>;
+  const av = p.availability ?? availability(p.schedule);
+  const ref = r?.location ?? null;
+  const d = ref ? distanceKm(ref, p) : null;
+  const reviews = p.resenas ?? [];
   const isMe = myProvider?.id === p.id;
 
-  const chat = () => { const c = openConversation(p.id, p.name, serviceById(p.services[0]).short, p.photo); navigate("/chat/" + c); };
+  const chat = async () => { const c = await openConversation({ provider: p.id }); navigate("/chat/" + c); };
   const hire = () => {
     if (r && r.status === "buscando") navigate(`/acuerdo/${r.id}/${p.id}`);
     else navigate(`/publicar?servicio=${p.services[0]}`);
@@ -610,7 +673,7 @@ export function ProviderProfile({ id }: { id: string }) {
           <div className="mt-1"><Rating value={p.rating} count={p.reviews} className="text-lg" /> <span className="text-ink-soft">reseñas</span></div>
           {p.verified && <Badge tone="ok" icon={LuCircleCheck} className="mt-2 px-4 py-1.5 text-base">Verificado</Badge>}
           <div className="mt-3 flex flex-wrap justify-center gap-2">
-            <Badge tone="brand" icon={LuMapPin} className="px-4 py-2 text-base">A {d.toFixed(1)} km</Badge>
+            <Badge tone="brand" icon={LuMapPin} className="px-4 py-2 text-base">{d != null ? `A ${d.toFixed(1)} km` : p.city.split(",")[0]}</Badge>
             <Badge tone={av === "otro" ? "warn" : "ok"} icon={LuCircleDot} className="px-4 py-2 text-base">{availabilityLabel[av]}</Badge>
           </div>
           <div className="mt-6 hidden gap-3 lg:grid">
@@ -662,9 +725,10 @@ export function ProviderProfile({ id }: { id: string }) {
 //  Acuerdo digital: Propuesta → Acuerdo → Confirmación
 // =====================================================================
 export function AgreementFlow({ rid, pid }: { rid: string; pid: string }) {
-  const { db, getProvider, confirmAgreement, openConversation } = useStore();
-  const r = db.requests.find((x) => x.id === rid);
+  const { findRequest, getProvider, confirmAgreement, openConversation } = useStore();
+  const r = findRequest(rid);
   const p = getProvider(pid);
+  const [busy, wrap] = useBusy();
   const app = r?.applicants.find((a) => a.providerId === pid);
   const [step, setStep] = useState(0);
   const [day, setDay] = useState(0);
@@ -741,14 +805,14 @@ export function AgreementFlow({ rid, pid }: { rid: string; pid: string }) {
                   <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} className="h-7 w-7 shrink-0 accent-brand" />
                   <span className="text-ink-soft">Acepto los <button type="button" className="font-semibold text-brand underline" onClick={() => setContract(true)}>términos del servicio</button> y confirmo la contratación.</span>
                 </label>
-                <Button className="mt-5 w-full py-4 text-lg" disabled={!accept} onClick={() => { confirmAgreement(r.id, p.id, date, time, price); setStep(2); }}>Confirmar acuerdo</Button>
+                <Button className="mt-5 w-full py-4 text-lg" disabled={!accept || busy} onClick={() => wrap(async () => { await confirmAgreement(r.id, p.id, date, time, price); setStep(2); })}>{busy ? "Guardando acuerdo…" : "Confirmar acuerdo"}</Button>
                 <button onClick={() => setStep(0)} className="mt-3 w-full text-sm font-semibold text-ink-soft">Cambiar fecha u hora</button>
               </>
             )}
             {done && (
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
                 <Button variant="soft" icon={LuFileText} onClick={() => setContract(true)}>Ver contrato</Button>
-                <Button icon={LuMessageCircle} onClick={() => navigate("/chat/" + openConversation(p.id, p.name, serviceById(r.service).short, p.photo))}>Escribir a {p.name.split(" ")[0]}</Button>
+                <Button icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ provider: p.id })))}>Escribir a {p.name.split(" ")[0]}</Button>
                 <Button variant="outline" className="sm:col-span-2" onClick={() => navigate("/solicitudes")}>Ir a mis solicitudes</Button>
               </div>
             )}
@@ -787,12 +851,17 @@ export function ContractModal({ open, onClose, r, p, date, time, price, code }: 
 //  Calificar servicio
 // =====================================================================
 export function RateService({ id }: { id: string }) {
-  const { db, getProvider, rateService, toast } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, getProvider, rate, toast } = useStore();
+  const r = findRequest(id);
   const [stars, setStars] = useState(0);
   const [comment, setComment] = useState("");
+  const [busy, wrap] = useBusy();
   if (!r) return <NotFoundReq />;
-  const p = getProvider(r.providerId)!;
+  const p = getProvider(r.providerId);
+  if (!p) return <NotFoundReq />;
+  if (r.rating) return (
+    <AppShell hideNav><Empty icon={LuCircleCheck} title="Ya calificaste este servicio" text={`Le diste ${r.rating.stars} estrellas a ${p.name}.`} action={<Button onClick={() => navigate("/solicitud/" + r.id)}>Ver solicitud</Button>} /></AppShell>
+  );
   const labels = ["", "Muy malo", "Malo", "Regular", "Bueno", "¡Excelente!"];
   return (
     <AppShell hideNav>
@@ -807,7 +876,7 @@ export function RateService({ id }: { id: string }) {
         <div className="mt-6 text-left text-lg font-bold">Comentario (opcional)</div>
         <textarea value={comment} maxLength={200} onChange={(e) => setComment(e.target.value)} placeholder="Excelente servicio, llegó puntual y solucionó el problema rápidamente." className="mt-3 h-32 w-full resize-none rounded-3xl bg-white p-5 text-lg outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
         <div className="text-right text-ink-soft">{comment.length}/200</div>
-        <Button className="mt-6 w-full py-[18px] text-xl" disabled={stars === 0} onClick={() => { rateService(r.id, stars, comment); toast("¡Gracias! Tu calificación mejora la comunidad (+50 puntos)"); navigate("/solicitudes?tab=realizados"); }}>Enviar calificación</Button>
+        <Button className="mt-6 w-full py-[18px] text-xl" disabled={stars === 0 || busy} onClick={() => wrap(async () => { await rate(r.id, stars, comment); toast("¡Gracias! Tu calificación quedó guardada (+50 puntos)"); navigate("/solicitudes?tab=realizados"); })}>{busy ? "Guardando…" : "Enviar calificación"}</Button>
       </div>
     </AppShell>
   );
@@ -889,11 +958,14 @@ export function MyRequests() {
 //  Detalle de una solicitud (cliente)
 // =====================================================================
 export function RequestDetail({ id }: { id: string }) {
-  const { db, getProvider, cancelRequest, extendDeadline, openConversation, visibleApplicants, toast } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, getProvider, cancelRequest, extendDeadline, openConversation, visibleApplicants, toast, editRequest, deleteRequest } = useStore();
+  const r = findRequest(id);
   const [late, setLate] = useState(false);
   const [cancel, setCancel] = useState(false);
   const [contract, setContract] = useState(false);
+  const [edit, setEdit] = useState(false);
+  const [del, setDel] = useState(false);
+  const [busy, wrap] = useBusy();
   if (!r) return <NotFoundReq />;
   const p = getProvider(r.providerId);
   const b = STATUS_BADGE[r.status];
@@ -938,7 +1010,7 @@ export function RequestDetail({ id }: { id: string }) {
                 <Avatar name={p.name} photo={p.photo} size={56} verified={p.verified} />
                 <div><div className="font-extrabold">{p.name}</div><Rating value={p.rating} count={p.reviews} className="text-sm" /></div>
               </Link>
-              <Button variant="soft" icon={LuMessageCircle} className="mt-4 w-full" onClick={() => navigate("/chat/" + openConversation(p.id, p.name, serviceById(r.service).short, p.photo))}>Enviar mensaje</Button>
+              <Button variant="soft" icon={LuMessageCircle} className="mt-4 w-full" onClick={async () => navigate("/chat/" + (await openConversation({ provider: p.id })))}>Enviar mensaje</Button>
             </div>
           )}
           <div className="card space-y-3 p-5">
@@ -946,7 +1018,8 @@ export function RequestDetail({ id }: { id: string }) {
               <>
                 <div className="font-bold">{visibleApplicants(r).length} postulaciones recibidas</div>
                 <Button className="w-full" onClick={() => navigate("/proveedores/" + r.id)}>Ver proveedores compatibles</Button>
-                <Button variant="danger" className="w-full" onClick={() => { cancelRequest(r.id, false); toast("Solicitud cancelada"); }}>Cancelar solicitud</Button>
+                <Button variant="outline" className="w-full" onClick={() => setEdit(true)}>Editar solicitud</Button>
+                <Button variant="danger" className="w-full" disabled={busy} onClick={() => wrap(async () => { await cancelRequest(r.id, false); toast("Solicitud cancelada"); })}>Cancelar solicitud</Button>
               </>
             )}
             {r.status === "en_curso" && (
@@ -964,6 +1037,7 @@ export function RequestDetail({ id }: { id: string }) {
               </>
             )}
             {r.status === "cancelada" && <Button variant="soft" className="w-full" icon={LuRepeat} onClick={() => navigate(`/publicar?servicio=${r.service}&desc=${encodeURIComponent(r.desc)}`)}>Publicar de nuevo</Button>}
+            {(r.status === "buscando" || r.status === "cancelada") && <button className="w-full pt-1 text-sm font-semibold text-bad" onClick={() => setDel(true)}>Eliminar solicitud</button>}
           </div>
         </div>
       </div>
@@ -971,15 +1045,23 @@ export function RequestDetail({ id }: { id: string }) {
       <Modal open={late} onClose={() => setLate(false)} title="¿El servicio es urgente?">
         <p className="text-ink-soft">Según las reglas de flexibilidad de ConectaPRO puedes darle al proveedor un plazo adicional. El retraso quedará registrado en su reputación.</p>
         <div className="mt-5 grid gap-3">
-          <Button icon={LuClock} onClick={() => { extendDeadline(r.id); setLate(false); toast("Plazo extendido 2 días. Se registró la falta de puntualidad."); }}>No es urgente: dar 2 días más</Button>
-          <Button variant="danger" onClick={() => { cancelRequest(r.id, false); setLate(false); toast("Acuerdo cancelado sin penalidad para ti"); }}>Es urgente: cancelar sin penalidad</Button>
+          <Button icon={LuClock} disabled={busy} onClick={() => wrap(async () => { await extendDeadline(r.id); setLate(false); toast("Plazo extendido 2 días. Se registró la falta de puntualidad."); })}>No es urgente: dar 2 días más</Button>
+          <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await cancelRequest(r.id, false); setLate(false); toast("Acuerdo cancelado sin penalidad para ti"); })}>Es urgente: cancelar sin penalidad</Button>
         </div>
       </Modal>
       <Modal open={cancel} onClose={() => setCancel(false)} title="¿Cancelar el acuerdo?">
         <div className="flex gap-3 rounded-2xl bg-bad-50 p-4 text-sm text-bad"><LuTriangleAlert className="h-5 w-5 shrink-0" /> Cancelar un acuerdo confirmado sin justificación cuenta como <b>falta grave</b>. Con 3 faltas tu cuenta será suspendida.</div>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <Button variant="outline" onClick={() => setCancel(false)}>Mantener acuerdo</Button>
-          <Button variant="danger" onClick={() => { cancelRequest(r.id, true); setCancel(false); }}>Sí, cancelar</Button>
+          <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await cancelRequest(r.id, true); setCancel(false); })}>Sí, cancelar</Button>
+        </div>
+      </Modal>
+      <EditRequestModal open={edit} onClose={() => setEdit(false)} r={r} onSave={(d, pay, dir) => editRequest(r.id, d, pay, dir).then(() => { setEdit(false); toast("Solicitud actualizada"); })} />
+      <Modal open={del} onClose={() => setDel(false)} title="¿Eliminar esta solicitud?">
+        <p className="text-ink-soft">Se borrará de la base de datos junto con sus postulaciones. Esta acción no se puede deshacer.</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <Button variant="outline" onClick={() => setDel(false)}>Volver</Button>
+          <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await deleteRequest(r.id); toast("Solicitud eliminada"); navigate("/solicitudes", true); })}>Eliminar</Button>
         </div>
       </Modal>
       {p && r.agreement && <ContractModal open={contract} onClose={() => setContract(false)} r={r} p={p} date={r.agreement.date} time={r.agreement.time} price={r.agreement.price} code={r.agreement.code} />}
@@ -1000,3 +1082,27 @@ function NotFoundReq() {
   return <AppShell><Empty icon={LuClipboardList} title="Solicitud no encontrada" action={<Button onClick={() => navigate("/inicio")}>Ir al inicio</Button>} /></AppShell>;
 }
 export { NotFoundReq };
+
+function EditRequestModal({ open, onClose, r, onSave }: { open: boolean; onClose: () => void; r: Request; onSave: (desc: string, pay: PaymentMethod, dir: string) => Promise<void> }) {
+  const [desc, setDesc] = useState(r.desc);
+  const [pay, setPay] = useState<PaymentMethod>(r.payment);
+  const [dir, setDir] = useState(r.direccion ?? "");
+  const [busy, wrap] = useBusy();
+  useEffect(() => { if (open) { setDesc(r.desc); setPay(r.payment); setDir(r.direccion ?? ""); } }, [open]);
+  return (
+    <Modal open={open} onClose={onClose} title="Editar solicitud">
+      <label className="block text-sm font-semibold">Descripción
+        <textarea value={desc} maxLength={500} onChange={(e) => setDesc(e.target.value)} className="mt-1 h-28 w-full resize-none rounded-2xl bg-surface p-3 font-normal outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
+      </label>
+      <label className="mt-3 block text-sm font-semibold">Dirección o barrio
+        <input value={dir} onChange={(e) => setDir(e.target.value)} className="mt-1 w-full rounded-2xl bg-surface px-3 py-3 font-normal outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
+      </label>
+      <label className="mt-3 block text-sm font-semibold">Método de pago
+        <select value={pay} onChange={(e) => setPay(e.target.value as PaymentMethod)} className="mt-1 w-full rounded-2xl bg-surface px-3 py-3 font-normal outline-none ring-1 ring-line">
+          {(Object.keys(PAYMENTS) as PaymentMethod[]).map((m) => <option key={m} value={m}>{PAYMENTS[m]}</option>)}
+        </select>
+      </label>
+      <Button className="mt-5 w-full" disabled={busy} onClick={() => wrap(() => onSave(desc, pay, dir))}>{busy ? "Guardando…" : "Guardar cambios"}</Button>
+    </Modal>
+  );
+}

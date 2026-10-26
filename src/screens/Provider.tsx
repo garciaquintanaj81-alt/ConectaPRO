@@ -11,7 +11,9 @@ import {
   Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars,
   PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, cx, shortDate, timeAgo,
 } from "../ui";
-import { BASE, CITIES, PAYMENTS, PaymentMethod, SERVICES, ServiceId, money, serviceById, CATEGORIES } from "../data";
+import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, money, serviceById, CATEGORIES } from "../data";
+import { UbicacionSelect } from "../geo";
+import { useBusy } from "../store";
 import { distanceKm, scheduleLabel } from "../matching";
 import { ContractModal, Info } from "./Client";
 
@@ -23,12 +25,15 @@ export function ProviderHome() {
   const [svc, setSvc] = useState<ServiceId | "todas">("todas");
   const [maxKm, setMaxKm] = useState(50);
   const [pay, setPay] = useState<PaymentMethod | "todos">("todos");
+  const [ubic, setUbic] = useState({ departamento: "", municipio: "" });
   if (!myProvider) return <NeedsProfile />;
 
   const nuevas = opportunities.filter((o) => !o.r.applicants.some((a) => a.providerId === myProvider.id));
-  const enCurso = myJobs.filter((j) => j.status === "en_curso").length + 10;
-  const completadas = myProvider.completed + myJobs.filter((j) => j.status === "completada").length;
+  const enCurso = myJobs.filter((j) => j.status === "en_curso").length;
+  const completadas = myProvider.completed;
   const list = nuevas
+    .filter((o) => !ubic.departamento || o.r.departamento === ubic.departamento)
+    .filter((o) => !ubic.municipio || o.r.municipio === ubic.municipio)
     .filter((o) => svc === "todas" || o.r.service === svc)
     .filter((o) => o.distance <= maxKm)
     .filter((o) => pay === "todos" || o.r.payment === pay);
@@ -67,7 +72,10 @@ export function ProviderHome() {
         <aside className="hidden space-y-5 xl:block">
           <div className="card p-5">
             <div className="mb-4 flex items-center justify-between"><div className="flex items-center gap-2 font-bold"><LuSlidersHorizontal className="h-5 w-5" /> Filtros</div>
-              <button className="text-sm font-semibold text-brand" onClick={() => { setSvc("todas"); setMaxKm(50); setPay("todos"); }}>Limpiar</button></div>
+              <button className="text-sm font-semibold text-brand" onClick={() => { setSvc("todas"); setMaxKm(50); setPay("todos"); setUbic({ departamento: "", municipio: "" }); }}>Limpiar</button></div>
+            <div className="mb-4 text-sm font-semibold">Ubicación de la solicitud
+              <UbicacionSelect variant="compact" allowAll value={ubic} onChange={setUbic} className="mt-1 !grid-cols-1" />
+            </div>
             <label className="block text-sm font-semibold">Categoría
               <select value={svc} onChange={(e) => setSvc(e.target.value as any)} className="mt-1 w-full rounded-xl bg-surface px-3 py-2.5 font-normal outline-none ring-1 ring-line">
                 <option value="todas">Todas mis categorías</option>
@@ -104,6 +112,7 @@ export function ProviderHome() {
 
 function OpportunityCard({ r, distance }: { r: Request; distance: number }) {
   const { clientInfo, applyTo, decline, myProvider, toast } = useStore();
+  const [busy, wrap] = useBusy();
   const c = clientInfo(r.clientKey);
   const isNew = Date.now() - r.createdAt < 15 * 60000;
   const PIcon = PAYMENT_ICON[r.payment];
@@ -133,8 +142,8 @@ function OpportunityCard({ r, distance }: { r: Request; distance: number }) {
       <div className="mt-4 hidden gap-3 border-t border-line pt-4 lg:flex">
         {applied ? <Badge tone="ok" icon={LuCircleCheck}>Postulado · esperando al cliente</Badge> : (
           <>
-            <Button className="px-5 py-2.5" icon={LuCheck} onClick={() => { applyTo(r.id, suggested); toast(`Te postulaste con ${money(suggested)}`); }}>Aceptar</Button>
-            <Button variant="outline" className="px-5 py-2.5" icon={LuX} onClick={() => { decline(r.id); toast("Oportunidad descartada"); }}>Descartar</Button>
+            <Button className="px-5 py-2.5" icon={LuCheck} disabled={busy} onClick={() => wrap(async () => { await applyTo(r.id, suggested); toast(`Te postulaste con ${money(suggested)}`); })}>Aceptar</Button>
+            <Button variant="outline" className="px-5 py-2.5" icon={LuX} disabled={busy} onClick={() => wrap(async () => { await decline(r.id); toast("Oportunidad descartada"); })}>Descartar</Button>
             <Link to={"/oportunidad/" + r.id} className="ml-auto self-center text-sm font-semibold text-brand">Ver detalle y proponer precio →</Link>
           </>
         )}
@@ -158,13 +167,16 @@ function NeedsProfile() {
 export function Opportunities() {
   const { opportunities, myProvider } = useStore();
   const [tab, setTab] = useState<"nuevas" | "postuladas">("nuevas");
+  const [ubic, setUbic] = useState({ departamento: "", municipio: "" });
   if (!myProvider) return <NeedsProfile />;
-  const nuevas = opportunities.filter((o) => !o.r.applicants.some((a) => a.providerId === myProvider.id));
-  const postuladas = opportunities.filter((o) => o.r.applicants.some((a) => a.providerId === myProvider.id));
+  const enUbic = opportunities.filter((o) => (!ubic.departamento || o.r.departamento === ubic.departamento) && (!ubic.municipio || o.r.municipio === ubic.municipio));
+  const nuevas = enUbic.filter((o) => !o.r.applicants.some((a) => a.providerId === myProvider.id));
+  const postuladas = enUbic.filter((o) => o.r.applicants.some((a) => a.providerId === myProvider.id));
   const list = tab === "nuevas" ? nuevas : postuladas;
   return (
     <AppShell>
       <PageHeader title="Oportunidades" back={false} sub={`Categorías: ${myProvider.services.map((s) => serviceById(s).short).join(", ")} · cobertura ${myProvider.coverageKm} km`} />
+      <UbicacionSelect variant="compact" allowAll value={ubic} onChange={setUbic} className="mb-4" />
       <div className="mb-5 flex gap-2.5">
         <Chip active={tab === "nuevas"} onClick={() => setTab("nuevas")} className="px-6 py-2.5 text-base">Nuevas ({nuevas.length})</Chip>
         <Chip active={tab === "postuladas"} onClick={() => setTab("postuladas")} className="px-6 py-2.5 text-base">Mis postulaciones ({postuladas.length})</Chip>
@@ -179,12 +191,13 @@ export function Opportunities() {
 //  Detalle de oportunidad: aceptar postulación con precio
 // =====================================================================
 export function OpportunityDetail({ id }: { id: string }) {
-  const { db, clientInfo, myProvider, applyTo, decline, toast, openConversation } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, clientInfo, myProvider, applyTo, decline, toast, openConversation } = useStore();
+  const r = findRequest(id);
+  const [busy, wrap] = useBusy();
   const suggested = myProvider ? Math.round((myProvider.priceMin + myProvider.priceMax) / 2 / 5000) * 5000 : 50000;
   const [price, setPrice] = useState(suggested);
   const [note, setNote] = useState("");
-  if (!r || !myProvider) return <AppShell><Empty icon={LuClipboardList} title="Oportunidad no encontrada" /></AppShell>;
+  if (!r || !myProvider) return <AppShell><Empty icon={LuClipboardList} title="Esta oportunidad ya no está disponible" text="Es posible que el cliente ya haya elegido a otro proveedor o la haya cancelado." action={<Button onClick={() => navigate("/oportunidades")}>Ver oportunidades</Button>} /></AppShell>;
   const c = clientInfo(r.clientKey);
   const d = distanceKm(myProvider, r.location);
   const applied = r.applicants.find((a) => a.providerId === myProvider.id);
@@ -216,7 +229,7 @@ export function OpportunityDetail({ id }: { id: string }) {
               <Badge tone="ok" icon={LuCircleCheck} className="text-base">¡El cliente te eligió!</Badge>
               <p className="mt-3 text-ink-soft">Se generó el acuerdo digital{r.agreement ? ` para ${agreementWhen(r.agreement.date, r.agreement.time)} por ${money(r.agreement.price)}` : ""}.</p>
               <Button className="mt-5 w-full" icon={LuBriefcase} onClick={() => navigate("/trabajo/" + r.id)}>Ver trabajo</Button>
-              <Button variant="soft" className="mt-3 w-full" icon={LuMessageCircle} onClick={() => navigate("/chat/" + openConversation(r.clientKey, c.name, "Cliente", c.photo))}>Escribir al cliente</Button>
+              <Button variant="soft" className="mt-3 w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Escribir al cliente</Button>
             </>
           ) : taken ? (
             <p className="font-semibold text-ink-soft">Esta solicitud ya fue asignada a otro proveedor.</p>
@@ -224,7 +237,7 @@ export function OpportunityDetail({ id }: { id: string }) {
             <>
               <Badge tone="ok" icon={LuCircleCheck} className="text-base">Te postulaste</Badge>
               <p className="mt-3 text-ink-soft">Propusiste <b className="text-ink">{money(applied.price)}</b>. El cliente verá tu perfil ordenado según tu calificación ({myProvider.rating.toFixed(1)} ⭐).</p>
-              <Button variant="soft" className="mt-5 w-full" icon={LuMessageCircle} onClick={() => navigate("/chat/" + openConversation(r.clientKey, c.name, "Cliente", c.photo))}>Escribir al cliente</Button>
+              <Button variant="soft" className="mt-5 w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Escribir al cliente</Button>
             </>
           ) : (
             <>
@@ -239,8 +252,8 @@ export function OpportunityDetail({ id }: { id: string }) {
               <label className="mt-4 block text-sm font-semibold">Mensaje para el cliente (opcional)
                 <textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={160} placeholder="Ej. Puedo llegar en 30 minutos con los materiales." className="mt-1 h-24 w-full resize-none rounded-2xl bg-surface p-3 font-normal outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
               </label>
-              <Button className="mt-5 w-full py-4" icon={LuCheck} disabled={price < 5000} onClick={() => { applyTo(r.id, price, note || undefined); toast("¡Postulación enviada! El cliente fue notificado."); }}>Aceptar y postularme</Button>
-              <Button variant="outline" className="mt-3 w-full" icon={LuX} onClick={() => { decline(r.id); toast("Oportunidad descartada"); navigate("/inicio"); }}>Descartar</Button>
+              <Button className="mt-5 w-full py-4" icon={LuCheck} disabled={price < 5000 || busy} onClick={() => wrap(async () => { await applyTo(r.id, price, note || undefined); toast("¡Postulación enviada! El cliente fue notificado."); })}>{busy ? "Enviando…" : "Aceptar y postularme"}</Button>
+              <Button variant="outline" className="mt-3 w-full" icon={LuX} disabled={busy} onClick={() => wrap(async () => { await decline(r.id); toast("Oportunidad descartada"); navigate("/inicio"); })}>Descartar</Button>
             </>
           )}
         </div>
@@ -285,8 +298,9 @@ export function MyJobs() {
 }
 
 export function JobDetail({ id }: { id: string }) {
-  const { db, clientInfo, myProvider, providerNoShow, openConversation } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, clientInfo, myProvider, providerNoShow, openConversation } = useStore();
+  const r = findRequest(id);
+  const [busy, wrap] = useBusy();
   const [noShow, setNoShow] = useState(false);
   const [contract, setContract] = useState(false);
   if (!r || !myProvider) return <AppShell><Empty icon={LuBriefcase} title="Trabajo no encontrado" /></AppShell>;
@@ -313,7 +327,7 @@ export function JobDetail({ id }: { id: string }) {
           {r.clientRating && <div className="mt-3 rounded-2xl p-4 ring-1 ring-line"><div className="text-sm font-bold text-ink-soft">Tu calificación al cliente</div><Stars value={r.clientRating.stars} /></div>}
         </div>
         <div className="card space-y-3 self-start p-5">
-          <Button variant="soft" className="w-full" icon={LuMessageCircle} onClick={() => navigate("/chat/" + openConversation(r.clientKey, c.name, "Cliente", c.photo))}>Escribir al cliente</Button>
+          <Button variant="soft" className="w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Escribir al cliente</Button>
           {r.agreement && <Button variant="outline" className="w-full" icon={LuFileText} onClick={() => setContract(true)}>Ver contrato</Button>}
           {r.status === "en_curso" && (
             <>
@@ -327,7 +341,7 @@ export function JobDetail({ id }: { id: string }) {
         <div className="flex gap-3 rounded-2xl bg-bad-50 p-4 text-sm text-bad"><LuTriangleAlert className="h-5 w-5 shrink-0" />No realizar un trabajo previamente acordado es una <b>falta grave</b>. Al acumular 3, tu cuenta será suspendida.</div>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <Button variant="outline" onClick={() => setNoShow(false)}>Volver</Button>
-          <Button variant="danger" onClick={() => { providerNoShow(r.id); setNoShow(false); }}>Cancelar trabajo</Button>
+          <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await providerNoShow(r.id); setNoShow(false); })}>Cancelar trabajo</Button>
         </div>
       </Modal>
       {r.agreement && <ContractModal open={contract} onClose={() => setContract(false)} r={r} p={myProvider} date={r.agreement.date} time={r.agreement.time} price={r.agreement.price} code={r.agreement.code} />}
@@ -339,8 +353,9 @@ export function JobDetail({ id }: { id: string }) {
 //  Calificación mutua: el proveedor califica al cliente
 // =====================================================================
 export function RateClient({ id }: { id: string }) {
-  const { db, clientInfo, rateClient, toast } = useStore();
-  const r = db.requests.find((x) => x.id === id);
+  const { findRequest, clientInfo, rate, toast } = useStore();
+  const r = findRequest(id);
+  const [busy, wrap] = useBusy();
   const [stars, setStars] = useState(0);
   const [comment, setComment] = useState("");
   if (!r) return <AppShell><Empty icon={LuBriefcase} title="Trabajo no encontrado" /></AppShell>;
@@ -355,7 +370,7 @@ export function RateClient({ id }: { id: string }) {
         <h2 className="mt-8 text-xl font-bold">¿Cómo fue tu experiencia con el cliente?</h2>
         <div className="mt-4 flex justify-center"><Stars value={stars} size={48} onChange={setStars} /></div>
         <textarea value={comment} maxLength={200} onChange={(e) => setComment(e.target.value)} placeholder="Pago puntual, muy amable." className="mt-6 h-28 w-full resize-none rounded-3xl bg-white p-5 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
-        <Button className="mt-6 w-full py-4 text-lg" disabled={!stars} onClick={() => { rateClient(r.id, stars, comment); toast("Trabajo completado. ¡Gracias por calificar! (+50 puntos)"); navigate("/trabajos"); }}>Enviar calificación</Button>
+        <Button className="mt-6 w-full py-4 text-lg" disabled={!stars || busy} onClick={() => wrap(async () => { await rate(r.id, stars, comment); toast("Trabajo completado. ¡Gracias por calificar! (+50 puntos)"); navigate("/trabajos"); })}>{busy ? "Guardando…" : "Enviar calificación"}</Button>
       </div>
     </AppShell>
   );
@@ -379,12 +394,13 @@ async function resizeImage(file: File, max = 480): Promise<string> {
 }
 
 export function MyService() {
-  const { account, myProvider, saveProviderProfile, toast, setMode } = useStore();
+  const { account, myProvider, saveProviderProfile, toast } = useStore();
+  const [busy, wrap] = useBusy();
   const p = myProvider;
   const [company, setCompany] = useState(p?.company ?? "");
   const [profession, setProfession] = useState(p?.profession ?? "");
   const [services, setServices] = useState<ServiceId[]>(p?.services ?? []);
-  const [city, setCity] = useState(p?.city ?? account?.city ?? BASE.label);
+  const [ubic, setUbic] = useState({ departamento: p?.departamento ?? account?.departamento ?? "", municipio: p?.municipio ?? account?.municipio ?? "" });
   const [coverage, setCoverage] = useState(p?.coverageKm ?? 10);
   const [days, setDays] = useState<number[]>(p?.schedule.days ?? [1, 2, 3, 4, 5, 6]);
   const [from, setFrom] = useState(p?.schedule.from ?? 8);
@@ -406,17 +422,20 @@ export function MyService() {
     if (!days.length) e.push("Selecciona los días de atención");
     if (to <= from) e.push("La hora de cierre debe ser posterior a la de apertura");
     if (about.trim().length < 15) e.push("Describe lo que haces (mínimo 15 caracteres)");
+    if (!ubic.departamento || !ubic.municipio) e.push("Selecciona el departamento y el municipio donde atiendes");
+    if (priceMax < priceMin) e.push("El precio máximo debe ser mayor o igual al mínimo");
     setErrors(e);
     if (e.length) return window.scrollTo({ top: 0, behavior: "smooth" });
-    saveProviderProfile({
-      name: account!.name, photo: account!.photo, company: company.trim(), profession: profession.trim() || serviceById(services[0]).name,
-      services, city, ...(BASE), coverageKm: coverage, schedule: { days: [...days].sort(), from, to },
-      priceMin, priceMax, about: about.trim(), offers: offers.split("\n").map((s) => s.trim()).filter(Boolean),
-      portfolio: gallery, phone: account!.phone,
-    } as any);
-    setMode("proveedor");
-    toast(isNew ? "¡Perfil de proveedor creado! Ya puedes recibir oportunidades" : "Perfil actualizado");
-    navigate("/inicio");
+    wrap(async () => {
+      await saveProviderProfile({
+        company: company.trim(), profession: profession.trim() || serviceById(services[0]).name,
+        services, departamento: ubic.departamento, municipio: ubic.municipio, coverageKm: coverage,
+        days: [...days].sort(), from, to, priceMin, priceMax, about: about.trim(),
+        offers: offers.split("\n").map((s) => s.trim()).filter(Boolean), portfolio: gallery,
+      });
+      toast(isNew ? "¡Perfil de proveedor creado! Ya puedes recibir oportunidades" : "Cambios guardados");
+      navigate("/inicio");
+    });
   };
 
   const sel = "mt-1 w-full rounded-2xl bg-white px-4 py-3.5 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50";
@@ -451,9 +470,8 @@ export function MyService() {
 
         <section className="card space-y-4 p-6">
           <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuRadar className="h-5 w-5 text-brand" /> Ubicación y cobertura</h2>
-          <label className="block text-sm font-semibold">Ciudad base
-            <select value={city} onChange={(e) => setCity(e.target.value)} className={sel}>{CITIES.map((c) => <option key={c}>{c}</option>)}</select>
-          </label>
+          <div className="text-sm font-semibold">Departamento y municipio base</div>
+          <UbicacionSelect value={ubic} onChange={setUbic} />
           <label className="block text-sm font-semibold">Zona de cobertura: <span className="text-brand">hasta {coverage} km</span>
             <input type="range" min={1} max={50} value={coverage} onChange={(e) => setCoverage(+e.target.value)} className="mt-3 w-full accent-brand" />
           </label>
@@ -517,7 +535,7 @@ export function MyService() {
           }} />
         </section>
 
-        <Button className="w-full py-[18px] text-xl" icon={LuSend} onClick={save}>{isNew ? "Publicar mi servicio" : "Guardar cambios"}</Button>
+        <Button className="w-full py-[18px] text-xl" icon={LuSend} disabled={busy} onClick={save}>{busy ? "Guardando…" : isNew ? "Publicar mi servicio" : "Guardar cambios"}</Button>
       </div>
     </AppShell>
   );

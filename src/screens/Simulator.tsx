@@ -5,8 +5,13 @@
 // =====================================================================
 import { useEffect, useRef, useState } from "react";
 import { LuRefreshCw, LuExternalLink, LuArrowLeft, LuPlay, LuMonitorSmartphone } from "react-icons/lu";
-import { DEMO_ACCOUNTS } from "../data";
-import { useStore } from "../store";
+// Etiquetas de las 4 cuentas de demostración (los datos reales vienen de la base de datos)
+const DEMO_ACCOUNTS = [
+  { id: "u1", name: "Daniela Jaramillo", photo: "img/daniela.jpg" },
+  { id: "u2", name: "Carlos Ramírez", photo: "img/carlos.jpg" },
+  { id: "u3", name: "Juan Pérez", photo: "img/cliente2.jpg" },
+  { id: "u4", name: "Andrés Torres", photo: "img/andres.jpg" },
+];
 import { Avatar, Button, Logo, cx } from "../ui";
 import { Link } from "../router";
 
@@ -52,6 +57,7 @@ function Phone({ id, role, color, reloadKey }: { id: string; role: string; color
           <iframe
             key={reloadKey}
             title={acc.name}
+            data-as={id}
             src={src}
             className="origin-top-left rounded-[34px] bg-surface"
             style={{ width: 390, height: 800, transform: `scale(${scale})` }}
@@ -63,10 +69,24 @@ function Phone({ id, role, color, reloadKey }: { id: string; role: string; color
 }
 
 export function Simulator() {
-  const { reset } = useStore();
   const [reloadKey, setReloadKey] = useState(0);
+  const [resetting, setResetting] = useState(false);
   const [one, setOne] = useState("u1");
-  const restart = () => { reset(); setReloadKey((k) => k + 1); };
+  // Pide a la pantalla de Daniela (cuenta demo) que reinicie los datos de ejemplo en la base de datos
+  const restart = () => {
+    const frame = document.querySelector<HTMLIFrameElement>("iframe[data-as]");
+    if (!frame?.contentWindow) return;
+    setResetting(true);
+    const done = (e: MessageEvent) => {
+      if (e.data !== "cp-reset-done") return;
+      window.removeEventListener("message", done);
+      setResetting(false);
+      setReloadKey((k) => k + 1);
+    };
+    window.addEventListener("message", done);
+    frame.contentWindow.postMessage("cp-reset-demo", "*");
+    setTimeout(() => { window.removeEventListener("message", done); setResetting(false); }, 15000);
+  };
   const [wide, setWide] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
@@ -83,7 +103,7 @@ export function Simulator() {
           <Link to="/" className="rounded-full p-2 hover:bg-white" ><LuArrowLeft className="h-6 w-6" /></Link>
           <Logo size="sm" />
           <div className="ml-auto flex gap-2">
-            <Button variant="outline" icon={LuRefreshCw} className="px-4 py-2.5 text-sm" onClick={restart}>Reiniciar simulación</Button>
+            <Button variant="outline" icon={LuRefreshCw} className="px-4 py-2.5 text-sm" disabled={resetting} onClick={restart}>{resetting ? "Reiniciando…" : "Reiniciar simulación"}</Button>
           </div>
         </header>
 
