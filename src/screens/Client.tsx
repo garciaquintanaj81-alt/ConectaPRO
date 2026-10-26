@@ -4,7 +4,7 @@ import {
   LuWallet, LuUsers, LuShieldCheck, LuMessageCircle, LuPhone, LuEllipsisVertical, LuWrench, LuBriefcase,
   LuTimer, LuCheck, LuCalendarDays, LuUserRound, LuCircleDollarSign, LuCreditCard, LuFileText, LuSparkles,
   LuFilter, LuBrain, LuCircleX, LuTriangleAlert, LuRepeat, LuArrowRight, LuClipboardList, LuRadar, LuStar,
-  LuChevronDown, LuZap, LuBadgeCheck, LuX,
+  LuChevronDown, LuZap, LuBadgeCheck, LuX, LuLocateFixed, LuNavigation, LuArrowLeft,
 } from "react-icons/lu";
 import { AppShell, MobileTopBar } from "../Layout";
 import { useStore, Request } from "../store";
@@ -13,10 +13,10 @@ import {
   Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars, Stepper, Toggle,
   CATEGORY_ICON, localISO, PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, clock, cx, shortDate, timeAgo,
 } from "../ui";
-import { CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById } from "../data";
+import { CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById, servicesOf, categoryById } from "../data";
 import { availability, availabilityLabel, distanceKm, predictRoutines, scheduleLabel } from "../matching";
 import { rpc } from "../api";
-import { UbicacionSelect, getMunicipios } from "../geo";
+import { UbicacionSelect, getMunicipios, useGeolocation, GEO_MSG } from "../geo";
 import { useBusy } from "../store";
 
 const query = () => new URLSearchParams(window.location.hash.split("?")[1] ?? "");
@@ -27,8 +27,6 @@ const query = () => new URLSearchParams(window.location.hash.split("?")[1] ?? ""
 export function ClientHome() {
   const { account, myRequests, getProvider, prefs } = useStore();
   const [q, setQ] = useState("");
-  const [slide, setSlide] = useState(0);
-  useEffect(() => { const t = setInterval(() => setSlide((s) => (s + 1) % 3), 4500); return () => clearInterval(t); }, []);
 
   const suggestions = useMemo(() => {
     if (prefs && !prefs.ia) return [];
@@ -36,118 +34,97 @@ export function ClientHome() {
   }, [myRequests, prefs]);
 
   const active = myRequests.filter((r) => r.status === "en_curso" || r.status === "buscando");
-  // Proveedores destacados de la ciudad del usuario (consulta a la base de datos)
+  // Proveedores mejor calificados en el municipio del usuario (consulta a la base de datos)
   const [featured, setFeatured] = useState<Provider[]>([]);
   useEffect(() => {
     if (!account?.municipio) return;
     rpc<{ resultados: Provider[] }>("api_buscar_proveedores", { p_departamento: account.departamento, p_municipio: account.municipio, p_orden: "rating" })
-      .then((r) => setFeatured(r.resultados.slice(0, 4))).catch(() => setFeatured([]));
+      .then((r) => setFeatured(r.resultados.filter((p) => p.ubicacion === "local").slice(0, 4))).catch(() => setFeatured([]));
   }, [account?.municipio]);
-  const banners = [
-    { t: "Conecta con profesionales verificados en tu zona", img: "img/banner_manos.jpg" },
-    { t: "Califica tus servicios y gana puntos con marcas aliadas", img: "img/girl.jpg" },
-    { t: "¿Sin efectivo? Prueba el match por trueque", img: "img/worker.jpg", to: "/trueque" },
-  ];
+  const populares = ["plomeria", "electricidad", "limpieza", "peluqueria", "refuerzo_escolar", "mudanzas"].map((id) => serviceById(id)).filter((x) => x.name !== x.id);
 
   return (
     <AppShell>
       <MobileTopBar />
-      <div className="grid gap-8 xl:grid-cols-[1fr_340px]">
+      <div className="grid gap-10 xl:grid-cols-[1fr_320px]">
         <div className="min-w-0">
-          <h1 className="text-[40px] font-extrabold leading-tight tracking-tight">Hola, {account?.name.split(" ")[0]} 👋</h1>
-          <p className="text-xl text-ink-soft">¿Qué servicio necesitas hoy?</p>
+          <h1 className="text-[28px] font-extrabold leading-tight tracking-tight sm:text-[32px]">Hola, {account?.name.split(" ")[0]}</h1>
+          <p className="mt-1 text-ink-soft">¿Qué servicio necesitas hoy?</p>
 
-          <form className="mt-6 flex gap-3" onSubmit={(e) => { e.preventDefault(); navigate("/explorar?q=" + encodeURIComponent(q)); }}>
-            <label className="flex flex-1 items-center gap-3 rounded-2xl bg-[#e9ecfb] px-5 py-4">
-              <LuSearch className="h-6 w-6 text-ink" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar servicios..." className="w-full bg-transparent text-lg outline-none placeholder:text-ink-soft" />
+          <form className="mt-5 flex gap-2" onSubmit={(e) => { e.preventDefault(); navigate("/explorar?q=" + encodeURIComponent(q)); }}>
+            <label className="flex flex-1 items-center gap-3 rounded-xl bg-white px-4 py-3.5 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/40">
+              <LuSearch className="h-5 w-5 text-ink-soft" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ej. plomero, clases de inglés, torta…" className="w-full bg-transparent outline-none placeholder:text-ink-soft/80" aria-label="Buscar servicios" />
             </label>
-            <Link to="/explorar" className="flex w-16 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-line" aria-label="Filtros"><LuSlidersHorizontal className="h-6 w-6" /></Link>
+            <Button type="submit" className="rounded-xl px-5">Buscar</Button>
           </form>
-
-          <div className="mt-7 grid grid-cols-4 gap-x-2.5 gap-y-5 sm:gap-x-4">
-            {CATEGORIES.map((c) => {
-              const Icon = CATEGORY_ICON[c.id];
-              return (
-                <Link key={c.id} to={"/explorar?cat=" + c.id} className="group flex flex-col items-center gap-2 text-center">
-                  <span className={cx("flex aspect-[1.4] w-full items-center justify-center rounded-2xl transition group-hover:scale-105", c.tint)}><Icon className="h-10 w-10" strokeWidth={2.2} /></span>
-                  <span className="whitespace-nowrap text-[12.5px] font-medium leading-tight tracking-tight min-[400px]:text-[13.5px] sm:text-[15px] sm:tracking-normal">{c.name}</span>
-                </Link>
-              );
-            })}
+          <div className="mt-3 flex flex-wrap gap-2 text-sm">
+            {populares.map((p) => (
+              <Link key={p.id} to={"/publicar?servicio=" + p.id} className="rounded-full bg-white px-3 py-1.5 font-medium text-ink-soft ring-1 ring-line hover:text-brand hover:ring-brand/40">{p.short}</Link>
+            ))}
           </div>
 
           {suggestions.map((s) => {
             const p = getProvider(s.providerId);
             return (
-              <div key={s.service} className="animate-fade-up mt-7 flex flex-col gap-4 rounded-3xl bg-gradient-to-r from-[#f3eeff] to-[#eaf0ff] p-5 ring-1 ring-brand-100 sm:flex-row sm:items-center">
-                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white text-brand-violet shadow-sm"><LuBrain className="h-6 w-6" /></span>
-                <div className="flex-1">
-                  <div className="text-xs font-bold uppercase tracking-wide text-brand-violet">Recomendación inteligente</div>
-                  <p className="mt-0.5 font-semibold">Se acerca la fecha en la que normalmente solicitas tu {serviceById(s.service).name.toLowerCase()}. ¿Quieres volver a contactar a {p ? p.name.split(" ")[0] : "tu proveedor"}?</p>
-                  <p className="mt-1 text-xs text-ink-soft">Lo has pedido {s.times} veces, aproximadamente cada {s.intervalDays} días.</p>
-                </div>
-                <Button className="shrink-0" onClick={() => navigate(p ? "/proveedor/" + p.id : "/publicar?servicio=" + s.service)}>Contactar</Button>
+              <div key={s.service} className="animate-fade-up mt-6 flex items-start gap-3 rounded-2xl bg-brand-50 p-4 sm:items-center">
+                <LuBrain className="mt-0.5 h-5 w-5 shrink-0 text-brand-violet sm:mt-0" />
+                <p className="flex-1 text-sm"><b>Recordatorio:</b> sueles pedir {serviceById(s.service).name.toLowerCase()} cada {s.intervalDays} días. ¿Contactar de nuevo a {p ? p.name.split(" ")[0] : "tu proveedor"}?</p>
+                <Button className="shrink-0 px-4 py-2 text-sm" onClick={() => navigate(p ? "/proveedor/" + p.id : "/publicar?servicio=" + s.service)}>Contactar</Button>
               </div>
             );
           })}
 
-          {/* Banner */}
-          <div className="relative mt-7 overflow-hidden rounded-3xl bg-gradient-to-r from-[#2463ff] via-[#4b3cf3] to-[#8a2cf0] text-white">
-            <div className="flex min-h-[170px] items-center">
-              <div className="relative z-10 max-w-[62%] p-6 sm:p-8">
-                <p key={slide} className="animate-fade-up text-2xl font-bold leading-snug sm:text-[28px]">{banners[slide].t}</p>
-                {banners[slide].to && <Link to={banners[slide].to!} className="mt-3 inline-flex items-center gap-1 text-sm font-bold underline">Probar ahora <LuArrowRight /></Link>}
-                <div className="mt-5 flex gap-2">
-                  {banners.map((_, i) => <button key={i} aria-label={`Banner ${i + 1}`} onClick={() => setSlide(i)} className={cx("h-2.5 w-2.5 rounded-full", i === slide ? "bg-white" : "bg-white/40")} />)}
-                </div>
-              </div>
-              <img key={banners[slide].img} src={banners[slide].img} alt="" className="animate-page absolute bottom-0 right-0 h-full w-[48%] object-cover object-center sm:w-[40%]" style={{ maskImage: "linear-gradient(90deg, transparent, #000 30%)", WebkitMaskImage: "linear-gradient(90deg, transparent, #000 30%)" }} />
-            </div>
+          <div className="mt-8 flex items-baseline justify-between">
+            <h2 className="text-lg font-bold">Sectores</h2>
+            <Link to="/explorar" className="text-sm font-semibold text-brand">Explorar todo</Link>
           </div>
-
-          <div className="mt-8">
-            <SectionTitle action={<Link to="/explorar" className="text-lg font-semibold text-brand-violet">Ver todos</Link>}>Servicios populares</SectionTitle>
-            <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-2 scrollbar-none sm:mx-0 sm:grid sm:grid-cols-4 sm:px-0">
-              {SERVICES.filter((s) => s.photo).map((s) => (
-                <Link key={s.id} to={"/publicar?servicio=" + s.id} className="card w-36 shrink-0 overflow-hidden transition hover:-translate-y-0.5 sm:w-auto">
-                  <img src={s.photo} alt={s.name} className="aspect-[1.15] w-full object-cover" />
-                  <div className="py-3 text-center text-[15px] font-semibold">{s.short}</div>
+          <div className="mt-3 grid grid-cols-3 gap-2.5 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-6">
+            {CATEGORIES.map((c) => {
+              const Icon = CATEGORY_ICON[c.id];
+              return (
+                <Link key={c.id} to={"/explorar?cat=" + c.id} className="group flex flex-col items-center gap-2 rounded-xl bg-white px-1.5 py-3 text-center ring-1 ring-line transition hover:ring-brand/40" title={c.description}>
+                  <span className={cx("flex h-10 w-10 items-center justify-center rounded-lg", c.tint)}><Icon className="h-5 w-5" /></span>
+                  <span className="text-[12.5px] font-semibold leading-tight sm:text-[13.5px]">{c.short}</span>
                 </Link>
-              ))}
-            </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* Columna derecha (escritorio) / bloques extra en móvil */}
-        <aside className="space-y-6">
-          <div>
-            <SectionTitle action={<Link to="/solicitudes" className="text-sm font-semibold text-brand-violet">Ver todas</Link>}>Mis servicios activos</SectionTitle>
+        <aside className="space-y-8">
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-lg font-bold">Mis servicios activos</h2>
+              <Link to="/solicitudes" className="text-sm font-semibold text-brand">Ver todos</Link>
+            </div>
             {active.length === 0 ? (
-              <div className="card p-5 text-center text-ink-soft">
+              <div className="rounded-xl border border-dashed border-line p-5 text-center text-sm text-ink-soft">
                 No tienes servicios activos.
-                <Button className="mt-4 w-full" onClick={() => navigate("/publicar")}>Publicar solicitud</Button>
+                <Link to="/publicar" className="mt-1 block font-semibold text-brand">Publicar una necesidad</Link>
               </div>
             ) : (
-              <div className="space-y-3">{active.slice(0, 3).map((r) => <ActiveCard key={r.id} r={r} />)}</div>
+              <div className="space-y-2.5">{active.slice(0, 3).map((r) => <ActiveCard key={r.id} r={r} />)}</div>
             )}
-          </div>
-          <div>
-            <SectionTitle action={<Link to="/explorar" className="text-sm font-semibold text-brand-violet">Ver más</Link>}>Destacados en {account?.city.split(",")[0]}</SectionTitle>
+          </section>
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h2 className="text-lg font-bold">Mejor calificados en {account?.city.split(",")[0]}</h2>
+            </div>
             <div className="card divide-y divide-line">
               {featured.length === 0 && <p className="p-5 text-center text-sm text-ink-soft">Aún no hay proveedores registrados en tu municipio.</p>}
               {featured.map((p) => (
-                <Link key={p.id} to={"/proveedor/" + p.id} className="flex items-center gap-3 p-4 hover:bg-surface/60">
-                  <Avatar name={p.name} photo={p.photo} size={48} dot={(p.availability ?? availability(p.schedule)) === "ahora" ? "on" : "away"} />
+                <Link key={p.id} to={"/proveedor/" + p.id} className="flex items-center gap-3 px-4 py-3 hover:bg-surface/60">
+                  <Avatar name={p.name} photo={p.photo} size={40} dot={(p.availability ?? availability(p.schedule)) === "ahora" ? "on" : "away"} />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-bold">{p.name}</div>
-                    <div className="truncate text-sm text-ink-soft">{p.profession}</div>
+                    <div className="truncate text-[15px] font-semibold">{p.name}</div>
+                    <div className="truncate text-xs text-ink-soft">{p.profession}</div>
                   </div>
                   <Rating value={p.rating} className="text-sm" />
                 </Link>
               ))}
             </div>
-          </div>
+          </section>
         </aside>
       </div>
     </AppShell>
@@ -160,10 +137,10 @@ function ActiveCard({ r }: { r: Request }) {
   const Icon = SERVICE_ICON[r.service];
   const apps = visibleApplicants(r).length;
   return (
-    <Link to={r.status === "buscando" ? "/proveedores/" + r.id : "/solicitud/" + r.id} className="card flex items-center gap-4 p-4 transition hover:-translate-y-0.5">
-      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-brand-50 text-brand"><Icon className="h-6 w-6" /></span>
+    <Link to={r.status === "buscando" ? "/proveedores/" + r.id : "/solicitud/" + r.id} className="card flex items-center gap-3 p-3.5 transition hover:ring-brand/40">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand"><Icon className="h-5 w-5" /></span>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-bold">{r.title}</div>
+        <div className="truncate text-[15px] font-semibold">{r.title}</div>
         {r.status === "en_curso" && r.agreement ? (
           <div className="text-sm text-ink-soft">{p?.name} · {agreementWhen(r.agreement.date, r.agreement.time)}</div>
         ) : (
@@ -182,13 +159,17 @@ function ActiveCard({ r }: { r: Request }) {
 export function Explore() {
   const { account } = useStore();
   const qp = query();
+  const geo = useGeolocation();
   const [q, setQ] = useState(qp.get("q") ?? "");
   const [debouncedQ, setDebouncedQ] = useState(q);
-  const [cat, setCat] = useState<CategoryId | "todas">((qp.get("cat") as CategoryId) ?? "todas");
+  const initialSub = qp.get("sub") ?? "";
+  const [cat, setCat] = useState<string>(qp.get("cat") ?? (initialSub ? serviceById(initialSub).category : ""));
+  const [sub, setSub] = useState<string>(initialSub);
   const [sort, setSort] = useState<"rating" | "distance">("rating");
   const [onlyNow, setOnlyNow] = useState(false);
+  const [nearMe, setNearMe] = useState(false);
   const [ubic, setUbic] = useState({ departamento: qp.get("dep") ?? account?.departamento ?? "", municipio: qp.get("mun") ?? account?.municipio ?? "" });
-  const [data, setData] = useState<{ total: number; referencia: string | null; resultados: Provider[] } | null>(null);
+  const [data, setData] = useState<{ total: number; referencia: string | null; distanciaDesde: string; resultados: Provider[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -198,30 +179,41 @@ export function Explore() {
   useEffect(() => {
     let alive = true;
     setLoading(true); setError("");
-    rpc<{ total: number; referencia: string | null; resultados: Provider[] }>("api_buscar_proveedores", {
+    rpc<NonNullable<typeof data>>("api_buscar_proveedores", {
       p_departamento: ubic.departamento || null, p_municipio: ubic.municipio || null,
-      p_categoria: cat === "todas" ? null : cat, p_texto: debouncedQ.trim() || null, p_solo_ahora: onlyNow, p_orden: sort,
+      p_categoria: cat || null, p_servicio: sub || null, p_texto: debouncedQ.trim() || null, p_solo_ahora: onlyNow, p_orden: sort,
+      p_lat: nearMe && geo.fix ? geo.fix.lat : null, p_lng: nearMe && geo.fix ? geo.fix.lng : null,
     })
       .then((r) => alive && setData(r))
       .catch((e) => alive && setError(e.message))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [ubic.departamento, ubic.municipio, cat, debouncedQ, onlyNow, sort]);
+  }, [ubic.departamento, ubic.municipio, cat, sub, debouncedQ, onlyNow, sort, nearMe, geo.fix?.at]);
+
+  const toggleNear = async () => {
+    if (nearMe) { setNearMe(false); setSort("rating"); return; }
+    const f = geo.fix ?? (await geo.request());
+    if (f) { setNearMe(true); setSort("distance"); }
+  };
+  const clearAll = () => { setQ(""); setCat(""); setSub(""); setOnlyNow(false); setNearMe(false); setSort("rating"); };
 
   const list = data?.resultados ?? [];
   const locales = list.filter((p) => p.ubicacion !== "cobertura");
   const cercanos = list.filter((p) => p.ubicacion === "cobertura");
+  const fromGps = data?.distanciaDesde === "gps";
+  const subs = cat ? servicesOf(cat) : [];
+  const sel = "w-full appearance-none rounded-xl bg-white py-3 pl-4 pr-10 text-[15px] outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/40 disabled:opacity-60";
   const card = (p: Provider) => (
-    <Link key={p.id} to={"/proveedor/" + p.id} className="card flex gap-4 p-4 transition hover:-translate-y-0.5">
-      <Avatar name={p.name} photo={p.photo} size={72} dot={p.availability === "ahora" ? "on" : "away"} />
+    <Link key={p.id} to={"/proveedor/" + p.id} className="card flex gap-3.5 p-4 transition hover:ring-brand/40">
+      <Avatar name={p.name} photo={p.photo} size={56} dot={p.availability === "ahora" ? "on" : "away"} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 font-extrabold">{p.name}{p.verified && <LuBadgeCheck className="h-4 w-4 shrink-0 text-brand" />}</div>
-        <div className="truncate text-sm text-ink-soft">{p.profession} · {p.services.map((x) => serviceById(x).short).join(", ")}</div>
+        <div className="flex items-center gap-1.5 font-bold">{p.name}{p.verified && <LuBadgeCheck className="h-4 w-4 shrink-0 text-brand" />}</div>
+        <div className="truncate text-sm text-ink-soft">{p.services.map((x) => serviceById(x).short).join(" · ")}</div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <Rating value={p.rating} count={p.reviews} />
-          <span className="inline-flex items-center gap-1 text-ink-soft"><LuMapPin className="h-4 w-4" />{p.city.split(",")[0]}{p.distanceKm != null && ` · ${p.distanceKm} km`}</span>
+          <span className="inline-flex items-center gap-1 text-ink-soft"><LuMapPin className="h-3.5 w-3.5" />{p.city.split(",")[0]}{p.distanceKm != null && ` · ${p.distanceKm} km${fromGps ? " de ti" : ""}`}</span>
         </div>
-        <div className="mt-1 text-sm font-bold">{money(p.priceMin)} - {money(p.priceMax)}</div>
+        <div className="mt-1 text-sm font-semibold">{money(p.priceMin)} – {money(p.priceMax)}</div>
       </div>
     </Link>
   );
@@ -229,210 +221,287 @@ export function Explore() {
   return (
     <AppShell>
       <PageHeader title="Explorar servicios" back="/inicio" className="lg:justify-start [&>div]:lg:px-0 [&>div]:lg:text-left [&>button]:lg:hidden" />
-      <div className="card space-y-4 p-4 sm:p-5">
-        <div className="flex gap-3">
-          <label className="flex flex-1 items-center gap-3 rounded-2xl bg-surface px-5 py-3.5 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50">
-            <LuSearch className="h-5 w-5" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Plomero, peluquería, mudanza…" className="w-full bg-transparent outline-none" aria-label="Buscar" />
-            {q && <button onClick={() => setQ("")} aria-label="Limpiar"><LuX className="h-5 w-5 text-ink-soft" /></button>}
-          </label>
-          <Button variant="outline" onClick={() => setSort(sort === "rating" ? "distance" : "rating")} className="shrink-0 px-4" icon={LuSlidersHorizontal}>
-            <span className="hidden sm:inline">{sort === "rating" ? "Mejor calificados" : "Más cercanos"}</span>
-          </Button>
-        </div>
+      <div className="card space-y-3 p-4">
+        <label className="flex items-center gap-3 rounded-xl bg-surface px-4 py-3 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/40">
+          <LuSearch className="h-5 w-5 text-ink-soft" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="¿Qué necesitas? Ej. lavadora, torta, inglés…" className="w-full bg-transparent outline-none" aria-label="Buscar" />
+          {q && <button onClick={() => setQ("")} aria-label="Limpiar"><LuX className="h-5 w-5 text-ink-soft" /></button>}
+        </label>
         <UbicacionSelect variant="compact" allowAll value={ubic} onChange={setUbic} />
-        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 scrollbar-none sm:mx-0 sm:flex-wrap sm:px-0">
-          <Chip active={cat === "todas"} onClick={() => setCat("todas")}>Todas</Chip>
-          {CATEGORIES.filter((c) => c.id !== "mas").map((c) => <Chip key={c.id} active={cat === c.id} onClick={() => setCat(c.id)}>{c.name}</Chip>)}
-          <Chip active={onlyNow} onClick={() => setOnlyNow(!onlyNow)}>● Disponible ahora</Chip>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="relative block">
+            <select aria-label="Sector" className={sel} value={cat} onChange={(e) => { setCat(e.target.value); setSub(""); }}>
+              <option value="">Todos los sectores</option>
+              {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <LuChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2" />
+          </label>
+          <label className="relative block">
+            <select aria-label="Subcategoría" className={sel} value={sub} disabled={!cat} onChange={(e) => setSub(e.target.value)}>
+              <option value="">{cat ? `Todas las subcategorías (${subs.length})` : "Primero elige un sector"}</option>
+              {subs.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+            <LuChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2" />
+          </label>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip active={onlyNow} onClick={() => setOnlyNow(!onlyNow)}>Disponible ahora</Chip>
+          <Chip active={nearMe} onClick={toggleNear}><LuLocateFixed className="mr-1 inline h-4 w-4" />{geo.status === "pidiendo" ? "Ubicando…" : "Cerca de mí"}</Chip>
+          <label className="relative ml-auto">
+            <select aria-label="Ordenar" value={sort} onChange={(e) => setSort(e.target.value as any)} className="appearance-none rounded-full bg-white py-2 pl-4 pr-9 text-sm font-semibold ring-1 ring-line">
+              <option value="rating">Mejor calificados</option>
+              <option value="distance">Más cercanos</option>
+            </select>
+            <LuChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+          </label>
+        </div>
+        {geo.status !== "ok" && GEO_MSG[geo.status] && <p className="text-xs text-ink-soft">{GEO_MSG[geo.status]}</p>}
+        {nearMe && geo.fix && <p className="text-xs text-ink-soft">Distancias medidas desde tu ubicación actual (precisión ±{geo.fix.accuracy} m). El filtro de departamento y municipio se mantiene.</p>}
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3 text-sm text-ink-soft" aria-live="polite">
         <span data-testid="explorar-total">
-          {loading ? "Buscando en la base de datos…" : error ? "" : `${data?.total ?? 0} proveedor${data?.total === 1 ? "" : "es"} ${data?.referencia ? "en " + data.referencia : "en toda Colombia"}`}
+          {loading ? "Buscando en la base de datos…" : error ? "" : `${data?.total ?? 0} proveedor${data?.total === 1 ? "" : "es"} ${data?.referencia ? "en " + data.referencia : "en toda Colombia"}${sub ? " · " + serviceById(sub).name : cat ? " · " + (categoryById(cat)?.short ?? "") : ""}`}
         </span>
-        {(ubic.departamento || ubic.municipio) && <button className="font-semibold text-brand" onClick={() => setUbic({ departamento: "", municipio: "" })}>Ver todo el país</button>}
+        {(q || cat || onlyNow || nearMe) && <button className="font-semibold text-brand" onClick={clearAll}>Limpiar filtros</button>}
       </div>
-
-      <Link to="/trueque" className="mt-4 flex items-center gap-4 rounded-3xl bg-gradient-to-r from-[#e8f7f1] to-[#eaf1ff] p-4 ring-1 ring-line">
-        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-ok"><LuRepeat className="h-5 w-5" /></span>
-        <div className="flex-1"><div className="font-bold">Match por trueque</div><div className="text-sm text-ink-soft">Intercambia habilidades sin usar dinero</div></div>
-        <LuChevronRight className="h-5 w-5 text-brand" />
-      </Link>
 
       {error ? (
         <div className="mt-6"><Empty icon={LuTriangleAlert} title="No se pudo consultar" text={error} /></div>
       ) : loading && !data ? (
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-32 animate-pulse" />)}</div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-28 animate-pulse" />)}</div>
       ) : list.length === 0 ? (
-        <div className="mt-6"><Empty icon={LuSearch} title="Sin resultados en esta ubicación" text="Prueba con otro municipio o categoría, o publica tu solicitud y el algoritmo buscará por ti." action={<Button onClick={() => navigate("/publicar")}>Publicar solicitud</Button>} /></div>
+        <div className="mt-6"><Empty icon={LuSearch} title="Sin resultados con estos filtros" text="Prueba con otro municipio, sector o subcategoría, o publica tu necesidad y el algoritmo avisará a los proveedores que la cubran." action={<Button onClick={() => navigate(sub ? "/publicar?servicio=" + sub : "/publicar")}>Publicar necesidad</Button>} /></div>
       ) : (
         <div className={cx("transition-opacity", loading && "opacity-60")}>
           {locales.length > 0 && (
             <>
-              {ubic.municipio && <h2 className="mb-3 mt-6 text-lg font-extrabold">Ubicados en {data?.referencia?.split(",")[0]} ({locales.length})</h2>}
-              <div className={cx("grid gap-4 md:grid-cols-2 xl:grid-cols-3", !ubic.municipio && "mt-5")} data-testid="explorar-resultados">{locales.map(card)}</div>
+              {ubic.municipio && <h2 className="mb-3 mt-5 font-bold">En {data?.referencia?.split(",")[0]} ({locales.length})</h2>}
+              <div className={cx("grid gap-3 md:grid-cols-2 xl:grid-cols-3", !ubic.municipio && "mt-4")} data-testid="explorar-resultados">{locales.map(card)}</div>
             </>
           )}
           {cercanos.length > 0 && (
             <>
-              <h2 className="mb-1 mt-8 text-lg font-extrabold">También atienden en {data?.referencia?.split(",")[0]} ({cercanos.length})</h2>
+              <h2 className="mt-8 font-bold">También atienden en {data?.referencia?.split(",")[0]} ({cercanos.length})</h2>
               <p className="mb-3 text-sm text-ink-soft">Proveedores de municipios vecinos cuya zona de cobertura incluye esta ubicación.</p>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{cercanos.map(card)}</div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{cercanos.map(card)}</div>
             </>
           )}
         </div>
       )}
+
+      <Link to="/trueque" className="mt-8 flex items-center gap-3 rounded-xl p-3 text-sm ring-1 ring-line hover:ring-brand/40">
+        <LuRepeat className="h-5 w-5 text-ok" />
+        <span className="flex-1"><b>Match por trueque:</b> intercambia habilidades sin usar dinero</span>
+        <LuChevronRight className="h-5 w-5 text-brand" />
+      </Link>
     </AppShell>
   );
 }
 
 // =====================================================================
-//  Publica tu solicitud
+//  Publicar necesidad: 1) sector y subcategoría  2) descripción
+//  3) ubicación (municipio + dirección obligatorios, GPS opcional)  4) pago
 // =====================================================================
+type Cercano = { codigo: string; nombre: string; departamento: string; departamentoNombre: string; distanciaKm: number };
+
 export function Publish() {
   const { publishRequest, toast, strikes, account, addresses } = useStore();
   const pre = query().get("servicio") as ServiceId | null;
+  const [cat, setCat] = useState<string>(pre ? serviceById(pre).category : "");
+  const [service, setService] = useState<ServiceId>(pre ?? "");
   const [desc, setDesc] = useState(query().get("desc") ?? "");
-  const [service, setService] = useState<ServiceId>(pre ?? "plomeria");
   const [ubic, setUbic] = useState({ departamento: account?.departamento ?? "", municipio: account?.municipio ?? "" });
   const [direccion, setDireccion] = useState("");
-  const [gps, setGps] = useState<{ lat: number; lng: number } | null>(null);
+  const geo = useGeolocation();
+  const [cercano, setCercano] = useState<Cercano | null>(null);
+  const [usarGps, setUsarGps] = useState(false);
   const [payment, setPayment] = useState<PaymentMethod>("efectivo");
   const [proposals, setProposals] = useState(true);
   const [placeModal, setPlaceModal] = useState(false);
-  const [locating, setLocating] = useState(false);
   const [err, setErr] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, wrap] = useBusy();
-  const SIcon = SERVICE_ICON[service] ?? LuWrench;
 
   // Vista previa del algoritmo (consulta la base de datos)
   useEffect(() => {
-    if (!ubic.municipio) { setPreview(null); return; }
+    if (!ubic.municipio || !service) { setPreview(null); return; }
     rpc<number>("api_vista_previa", { p_servicio: service, p_municipio: ubic.municipio }).then(setPreview).catch(() => setPreview(null));
   }, [service, ubic.municipio]);
 
-  const useGps = () => {
-    if (!navigator.geolocation) return toast("Tu navegador no permite GPS");
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        try {
-          const here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          const m = await rpc<{ codigo: string; nombre: string; departamento: string; departamentoNombre: string }>("api_municipio_cercano", { p_lat: here.lat, p_lng: here.lng });
-          await getMunicipios(m.departamento);
-          setUbic({ departamento: m.departamento, municipio: m.codigo });
-          setGps(here);
-          toast(`Ubicación detectada: ${m.nombre}, ${m.departamentoNombre}`);
-        } catch { toast("No pudimos identificar tu municipio. Elígelo manualmente."); }
-        finally { setLocating(false); }
-      },
-      () => { setLocating(false); toast("No pudimos acceder a tu ubicación. Elige el departamento y municipio."); },
-      { timeout: 10000 }
-    );
+  // El GPS solo se usa si corresponde al municipio elegido
+  const gpsCoincide = !!cercano && cercano.codigo === ubic.municipio;
+  useEffect(() => { if (!gpsCoincide) setUsarGps(false); }, [gpsCoincide]);
+
+  const pedirGps = async () => {
+    const f = await geo.request();
+    if (!f) return;
+    try {
+      const m = await rpc<Cercano>("api_municipio_cercano", { p_lat: f.lat, p_lng: f.lng });
+      setCercano(m);
+      if (m.codigo === ubic.municipio) setUsarGps(true);
+    } catch { toast("No pudimos identificar el municipio de tu ubicación"); }
+  };
+  const usarMunicipioGps = async () => {
+    if (!cercano) return;
+    await getMunicipios(cercano.departamento);
+    setUbic({ departamento: cercano.departamento, municipio: cercano.codigo });
+    setUsarGps(true);
+    setErr({ ...err, departamento: "", municipio: "" });
   };
 
   const submit = () => wrap(async () => {
     if (strikes >= 3) { toast("Tu cuenta está suspendida por acumular 3 faltas graves"); return; }
     const e: Record<string, string> = {};
+    if (!service) e.service = "Elige el sector y la subcategoría de lo que necesitas";
     if (desc.trim().length < 10) e.desc = "Describe tu necesidad (mínimo 10 caracteres)";
     if (!ubic.departamento) e.departamento = "Selecciona el departamento";
     if (!ubic.municipio) e.municipio = "Selecciona la ciudad o municipio";
+    if (direccion.trim().length < 5) e.direccion = "Escribe la dirección donde se prestará el servicio";
     setErr(e);
-    if (Object.keys(e).length) return;
-    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, lat: gps?.lat, lng: gps?.lng, direccion, payment, wantsProposals: proposals });
+    if (Object.keys(e).length) { document.querySelector("[data-err]")?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+    const gps = usarGps && gpsCoincide && geo.fix ? geo.fix : null;
+    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, lat: gps?.lat, lng: gps?.lng, precision: gps?.accuracy, direccion: direccion.trim(), payment, wantsProposals: proposals });
     navigate("/buscando/" + r.id);
   });
 
+  const step = (n: number, title: string, done: boolean) => (
+    <h2 className="mb-3 flex items-center gap-2.5 font-bold">
+      <span className={cx("flex h-6 w-6 items-center justify-center rounded-full text-xs", done ? "bg-ok text-white" : "bg-brand-50 text-brand")}>{done ? <LuCheck className="h-3.5 w-3.5" strokeWidth={3} /> : n}</span>
+      {title}
+    </h2>
+  );
+  const errText = (k: string) => err[k] ? <p data-err className="mt-1.5 text-sm font-medium text-bad">{err[k]}</p> : null;
+  const inputCls2 = "w-full rounded-xl bg-white px-4 py-3 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/40";
+  const c = categoryById(cat);
+  const CatIcon = cat ? CATEGORY_ICON[cat] : LuSearch;
+
   return (
     <AppShell hideNav>
-      <PageHeader title="Publica tu solicitud" back="/inicio" right={<img src="img/logo.png" alt="" className="h-12 w-12 lg:hidden" />} />
-      <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
-        <div className="space-y-6">
-          <section>
-            <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuCircleCheck className="h-7 w-7 fill-ink text-white" /> Descripción del servicio</h2>
+      <PageHeader title="Publicar necesidad" back="/inicio" />
+      <div className="grid gap-8 lg:grid-cols-[1fr_300px]">
+        <div className="space-y-5">
+          {/* 1. Sector y subcategoría */}
+          <section className="card p-5">
+            {step(1, "¿Qué necesitas?", !!service)}
+            {!cat ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="list" aria-label="Sectores">
+                {CATEGORIES.map((x) => {
+                  const I = CATEGORY_ICON[x.id];
+                  return (
+                    <button key={x.id} onClick={() => { setCat(x.id); setService(""); }} className="flex items-center gap-2.5 rounded-xl p-3 text-left ring-1 ring-line hover:ring-brand/40">
+                      <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", x.tint)}><I className="h-[18px] w-[18px]" /></span>
+                      <span className="min-w-0 text-sm font-semibold leading-tight">{x.short}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center gap-3 rounded-xl bg-surface p-3">
+                  <span className={cx("flex h-9 w-9 items-center justify-center rounded-lg", c?.tint)}><CatIcon className="h-[18px] w-[18px]" /></span>
+                  <div className="min-w-0 flex-1"><div className="text-xs text-ink-soft">Sector</div><div className="font-semibold">{c?.name}</div></div>
+                  <button onClick={() => { setCat(""); setService(""); }} className="text-sm font-semibold text-brand">Cambiar</button>
+                </div>
+                <div className="mt-4 text-sm font-semibold">Subcategoría</div>
+                <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-label="Subcategoría">
+                  {servicesOf(cat).map((x) => {
+                    const I = SERVICE_ICON[x.id];
+                    return (
+                      <button key={x.id} role="radio" aria-checked={service === x.id} onClick={() => { setService(x.id); setErr({ ...err, service: "" }); }}
+                        className={cx("inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-medium transition", service === x.id ? "bg-brand text-white" : "bg-white ring-1 ring-line hover:ring-brand/40")}>
+                        <I className="h-4 w-4" />{x.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {errText("service")}
+          </section>
+
+          {/* 2. Descripción */}
+          <section className="card p-5">
+            {step(2, "Describe lo que necesitas", desc.trim().length >= 10)}
             <textarea
               name="descripcion"
               value={desc}
               maxLength={500}
               onChange={(e) => { setDesc(e.target.value); setErr({ ...err, desc: "" }); }}
-              placeholder="Ej. Necesito reparar una tubería rota, se presenta una fuga de agua en la cocina..."
-              className={cx("h-32 w-full resize-none rounded-2xl bg-[#eef1fb] p-5 text-[17px] outline-none ring-1 ring-line placeholder:text-ink-soft/80 focus:ring-2 focus:ring-brand/50", err.desc && "ring-2 ring-bad/50")}
+              placeholder="Ej. Necesito reparar una tubería rota, hay una fuga de agua en la cocina."
+              className={cx(inputCls2, "h-28 resize-none", err.desc && "ring-2 ring-bad/50")}
             />
-            <div className="flex justify-between text-sm"><span className="font-medium text-bad">{err.desc}</span><span className="text-ink-soft">{desc.length}/500</span></div>
+            <div className="flex justify-between text-xs text-ink-soft"><span />{desc.length}/500</div>
+            {errText("desc")}
           </section>
 
-          <section>
-            <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuUsers className="h-6 w-6" /> Categoría del servicio</h2>
-            <label className="relative flex items-center gap-4 rounded-2xl bg-[#eef1fb] px-5 py-4 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50">
-              <SIcon className="h-8 w-8 text-brand-blue" />
-              <select name="servicio" value={service} onChange={(e) => setService(e.target.value as ServiceId)} className="w-full appearance-none bg-transparent text-lg outline-none">
-                {CATEGORIES.filter((c) => c.id !== "mas").map((c) => (
-                  <optgroup key={c.id} label={c.name}>
-                    {SERVICES.filter((s) => s.category === c.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </optgroup>
-                ))}
-              </select>
-              <LuChevronDown className="pointer-events-none h-6 w-6" />
-            </label>
-          </section>
-
-          <section>
-            <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuMapPin className="h-6 w-6 fill-ink text-white" /> Ubicación</h2>
-            <MapMock className="h-44 sm:h-52">
-              <button onClick={useGps} className="absolute bottom-3 right-3 flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold shadow-md">
-                <LuCircleDot className={cx("h-5 w-5", locating && "animate-spin")} /> {locating ? "Ubicando…" : "Usar mi ubicación"}
-              </button>
-            </MapMock>
-            <UbicacionSelect className="mt-3" value={ubic} onChange={(v) => { setUbic(v); setGps(null); setErr({ ...err, departamento: "", municipio: "" }); }}
-              errors={{ departamento: err.departamento, municipio: err.municipio }} />
+          {/* 3. Ubicación */}
+          <section className="card p-5">
+            {step(3, "¿Dónde se prestará el servicio?", !!ubic.municipio && direccion.trim().length >= 5)}
+            <UbicacionSelect variant="compact" value={ubic} onChange={(v) => { setUbic(v); setErr({ ...err, departamento: "", municipio: "" }); }} />
+            {errText("departamento") || errText("municipio")}
             <div className="mt-3 flex gap-2">
-              <input name="direccion" value={direccion} onChange={(e) => setDireccion(e.target.value)} placeholder="Dirección o barrio (opcional)" className="flex-1 rounded-2xl bg-white px-4 py-3.5 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
-              {addresses.length > 0 && <Button variant="soft" className="shrink-0 px-4" onClick={() => setPlaceModal(true)}>Guardadas</Button>}
+              <input name="direccion" value={direccion} onChange={(e) => { setDireccion(e.target.value); setErr({ ...err, direccion: "" }); }}
+                placeholder="Dirección y barrio *" className={cx(inputCls2, err.direccion && "ring-2 ring-bad/50")} />
+              {addresses.length > 0 && <Button variant="outline" className="shrink-0 rounded-xl px-4 text-sm" onClick={() => setPlaceModal(true)}>Guardadas</Button>}
+            </div>
+            {errText("direccion")}
+
+            <div className="mt-4 rounded-xl bg-surface p-3.5 text-sm">
+              {!geo.fix ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <p className="flex min-w-0 flex-1 items-start gap-2.5 text-ink-soft"><LuLocateFixed className="mt-0.5 h-5 w-5 shrink-0 text-brand" />Opcional: comparte tu ubicación actual para que te contacten primero los proveedores más cercanos.</p>
+                  <Button variant="soft" className="shrink-0 rounded-xl px-4 py-2 text-sm" disabled={geo.status === "pidiendo"} onClick={pedirGps}>{geo.status === "pidiendo" ? "Ubicando…" : "Usar mi ubicación"}</Button>
+                  {GEO_MSG[geo.status] && <p className="w-full text-xs text-bad">{GEO_MSG[geo.status]}</p>}
+                </div>
+              ) : cercano && gpsCoincide ? (
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input type="checkbox" checked={usarGps} onChange={(e) => setUsarGps(e.target.checked)} className="mt-0.5 h-5 w-5 accent-brand" />
+                  <span><b>Usar mi ubicación GPS como punto exacto</b> (±{geo.fix.accuracy} m, dentro de {cercano.nombre}). El municipio sigue siendo {cercano.nombre}; el GPS solo mejora el cálculo de cercanía.</span>
+                </label>
+              ) : cercano ? (
+                <div className="space-y-2">
+                  <p>Tu ubicación actual parece estar en <b>{cercano.nombre}, {cercano.departamentoNombre}</b>, que no coincide con el municipio elegido. No la usaremos a menos que cambies el municipio.</p>
+                  <div className="flex gap-2">
+                    <Button variant="soft" className="rounded-xl px-4 py-2 text-sm" onClick={usarMunicipioGps}>Usar {cercano.nombre}</Button>
+                    <Button variant="ghost" className="rounded-xl px-3 py-2 text-sm" onClick={() => { geo.clear(); setCercano(null); }}>Descartar GPS</Button>
+                  </div>
+                </div>
+              ) : <p className="text-ink-soft">Ubicando municipio…</p>}
             </div>
           </section>
 
-          <section>
-            <h2 className="mb-2.5 flex items-center gap-2.5 text-lg font-bold"><LuWallet className="h-6 w-6" /> Método de pago preferido</h2>
-            <div className="grid grid-cols-4 gap-2.5">
+          {/* 4. Pago */}
+          <section className="card p-5">
+            {step(4, "Método de pago preferido", true)}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {(Object.keys(PAYMENTS) as PaymentMethod[]).map((m) => {
                 const Icon = PAYMENT_ICON[m];
                 return (
-                  <button key={m} onClick={() => setPayment(m)} className={cx("flex flex-col items-center gap-2 rounded-2xl px-1 py-4 text-center text-sm font-medium transition sm:text-[15px]", payment === m ? "bg-[#e3ecff] ring-2 ring-brand-blue" : "bg-white ring-1 ring-line hover:ring-brand/40")}>
-                    <Icon className={cx("h-8 w-8", payment === m ? "text-brand-blue" : PAYMENT_COLOR[m])} />
+                  <button key={m} onClick={() => setPayment(m)} className={cx("flex items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-medium transition", payment === m ? "bg-brand-50 ring-2 ring-brand" : "bg-white ring-1 ring-line hover:ring-brand/40")}>
+                    <Icon className={cx("h-5 w-5 shrink-0", payment === m ? "text-brand" : PAYMENT_COLOR[m])} />
                     <span className="leading-tight">{PAYMENTS[m]}</span>
                   </button>
                 );
               })}
             </div>
+            <div className="mt-4 flex items-center gap-3 border-t border-line pt-4">
+              <div className="flex-1"><div className="text-sm font-semibold">Recibir propuestas de precio</div><p className="text-xs text-ink-soft">Los proveedores compatibles podrán enviarte sus ofertas.</p></div>
+              <Toggle on={proposals} onChange={setProposals} label="Recibir propuestas" />
+            </div>
           </section>
 
-          <section className="flex items-start gap-3">
-            <LuCircleDot className="mt-0.5 h-6 w-6 shrink-0 text-brand-blue" />
-            <div className="flex-1"><div className="text-lg font-bold">Quiero recibir propuestas</div><p className="text-ink-soft">Los proveedores cercanos podrán enviarte sus ofertas.</p></div>
-            <Toggle on={proposals} onChange={setProposals} label="Quiero recibir propuestas" />
-          </section>
-
-          <Button onClick={submit} disabled={busy} className="w-full py-[18px] text-xl">{busy ? "Publicando…" : "Publicar solicitud"}</Button>
+          <Button onClick={submit} disabled={busy} className="w-full rounded-xl py-4 text-lg">{busy ? "Publicando…" : "Publicar necesidad"}</Button>
         </div>
 
-        {/* Panel lateral (escritorio) */}
         <aside className="hidden lg:block">
-          <div className="card sticky top-24 overflow-hidden p-6">
-            <h3 className="text-2xl font-extrabold leading-tight">Tu solicitud,<br /><span className="text-brand">en manos correctas</span></h3>
-            <p className="mt-2 text-sm text-ink-soft">Conecta con profesionales verificados, de manera rápida, segura y cerca de ti.</p>
-            <ul className="mt-5 space-y-4 text-sm">
-              {[[LuZap, "Publicación rápida", "En pocos pasos"], [LuShieldCheck, "Profesionales verificados", "Personas de confianza"], [LuMapPin, "Cerca de ti", "Encuentra ayuda en tu zona"], [LuMessageCircle, "Comunicación segura", "Todo en un solo lugar"]].map(([I, t, d]: any) => (
-                <li key={t} className="flex gap-3"><I className="mt-0.5 h-5 w-5 text-brand" /><div><div className="font-bold">{t}</div><div className="text-ink-soft">{d}</div></div></li>
-              ))}
+          <div className="card sticky top-24 space-y-4 p-5 text-sm">
+            <div className="flex items-center gap-2 font-bold text-brand"><LuRadar className="h-5 w-5" /> Vista previa del algoritmo</div>
+            <p className="text-ink-soft">{preview == null ? "Elige la subcategoría y el municipio para ver cuántos proveedores pueden atenderte." : <><b className="text-2xl text-ink">{preview}</b><br />proveedores de {serviceById(service).name.toLowerCase()} cubren {ubic.municipio ? "este municipio" : "esta zona"}.</>}</p>
+            <ul className="space-y-2 border-t border-line pt-4 text-ink-soft">
+              <li className="flex gap-2"><LuShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Solo se notifica a proveedores verificados de esa subcategoría.</li>
+              <li className="flex gap-2"><LuMapPin className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Tu dirección solo la ve el proveedor que contrates.</li>
             </ul>
-            <div className="mt-5 rounded-2xl bg-brand-50 p-4 text-sm">
-              <div className="flex items-center gap-2 font-bold text-brand"><LuRadar className="h-5 w-5" /> Vista previa del algoritmo</div>
-              <p className="mt-1 text-ink-soft">{preview == null ? "Elige el municipio para ver cuántos proveedores te pueden atender." : <><b className="text-ink">{preview}</b> proveedores de {serviceById(service).name.toLowerCase()} cubren esta ubicación.</>}</p>
-            </div>
-            <img src="img/girl.jpg" alt="" className="mt-5 w-full rounded-2xl" />
           </div>
         </aside>
       </div>
@@ -440,10 +509,10 @@ export function Publish() {
       <Modal open={placeModal} onClose={() => setPlaceModal(false)} title="Mis direcciones guardadas">
         <div className="space-y-2">
           {addresses.map((p) => (
-            <button key={p.id} onClick={async () => { await getMunicipios(p.departamento); setUbic({ departamento: p.departamento, municipio: p.municipio }); setDireccion(p.address); setGps(null); setPlaceModal(false); }}
-              className="flex w-full items-center gap-3 rounded-2xl p-3 text-left ring-1 ring-line hover:bg-surface">
-              <LuMapPin className="h-6 w-6 text-brand" />
-              <div><div className="font-bold">{p.name}</div><div className="text-sm text-ink-soft">{p.address} · {p.label}</div></div>
+            <button key={p.id} onClick={async () => { await getMunicipios(p.departamento); setUbic({ departamento: p.departamento, municipio: p.municipio }); setDireccion(p.address); setPlaceModal(false); setErr({}); }}
+              className="flex w-full items-center gap-3 rounded-xl p-3 text-left ring-1 ring-line hover:bg-surface">
+              <LuMapPin className="h-5 w-5 text-brand" />
+              <div><div className="font-semibold">{p.name}</div><div className="text-sm text-ink-soft">{p.address} · {p.label}</div></div>
             </button>
           ))}
           <Link to="/perfil/direcciones" className="block pt-2 text-center text-sm font-semibold text-brand">Administrar direcciones</Link>
@@ -986,6 +1055,7 @@ export function RequestDetail({ id }: { id: string }) {
           <p className="mt-5 rounded-2xl bg-surface p-4 text-ink-soft">{r.desc}</p>
           <dl className="mt-5 grid gap-4 sm:grid-cols-2">
             <Info icon={LuMapPin} k="Ubicación" v={r.location.label} />
+            <Info icon={LuLocateFixed} k="Punto para el emparejamiento" v={r.gps ? `GPS exacto (±${r.gpsPrecision ?? "?"} m)` : "Centro del municipio"} />
             <Info icon={LuCreditCard} k="Método de pago" v={PAYMENTS[r.payment]} />
             <Info icon={LuCalendarDays} k="Publicada" v={`${shortDate(r.createdAt)} · ${clock(r.createdAt)}`} />
             <Info icon={LuUsers} k="Proveedores notificados" v={`${r.matched.length} compatibles`} />

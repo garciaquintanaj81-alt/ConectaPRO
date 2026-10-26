@@ -17,7 +17,7 @@ export const PAYMENTS: Record<PaymentMethod, string> = {
 export type CategoryId = string;
 export type ServiceId = string;
 
-export interface Category { id: CategoryId; name: string; tint: string }
+export interface Category { id: CategoryId; name: string; short: string; description?: string; providers?: number; tint: string }
 export interface Service { id: ServiceId; name: string; short: string; category: CategoryId; photo?: string }
 
 // Colores de cada categoría (solo presentación)
@@ -29,6 +29,11 @@ const TINTS: Record<string, string> = {
   transporte: "bg-[#e7f3ff] text-brand-blue",
   salud: "bg-[#fdeef3] text-[#e7336b]",
   mascotas: "bg-[#e6f3ff] text-brand-blue",
+  educacion: "bg-[#fff4e5] text-[#c2410c]",
+  comercio: "bg-[#e9f8f0] text-[#15803d]",
+  agricultura: "bg-[#eef8e6] text-[#4d7c0f]",
+  profesionales: "bg-[#eef2f7] text-[#334155]",
+  eventos: "bg-[#fdeef8] text-[#be185d]",
   mas: "bg-[#eef0ff] text-brand",
 };
 
@@ -36,10 +41,13 @@ const TINTS: Record<string, string> = {
 export const CATEGORIES: Category[] = [];
 export const SERVICES: Service[] = [];
 
-export function setCatalog(c: { categorias: { id: string; name: string }[]; servicios: Service[] }) {
-  CATEGORIES.splice(0, CATEGORIES.length, ...c.categorias.map((x) => ({ ...x, tint: TINTS[x.id] ?? TINTS.mas })));
+export function setCatalog(c: { categorias: Omit<Category, "tint">[]; servicios: Service[] }) {
+  CATEGORIES.splice(0, CATEGORIES.length, ...c.categorias.map((x) => ({ ...x, short: x.short ?? x.name, tint: TINTS[x.id] ?? TINTS.mas })));
   SERVICES.splice(0, SERVICES.length, ...c.servicios.map((s) => ({ ...s, photo: s.photo ?? undefined })));
 }
+
+export const servicesOf = (cat: CategoryId) => SERVICES.filter((s) => s.category === cat);
+export const categoryById = (id: CategoryId) => CATEGORIES.find((c) => c.id === id);
 
 export const serviceById = (id: ServiceId): Service =>
   SERVICES.find((s) => s.id === id) ?? { id, name: id, short: id, category: "mas" };

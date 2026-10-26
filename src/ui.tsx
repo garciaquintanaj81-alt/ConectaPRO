@@ -3,26 +3,50 @@ import { ReactNode, useEffect, useState } from "react";
 import {
   LuArrowLeft, LuStar, LuHouse, LuLaptop, LuWrench, LuPaintRoller, LuCar, LuHeart, LuPawPrint, LuEllipsis,
   LuZap, LuAirVent, LuBrickWall, LuSmartphone, LuScissors, LuSparkles, LuTruck, LuHeartPulse, LuDog, LuBrush,
-  LuBanknote, LuArrowLeftRight, LuCreditCard, LuWallet, LuMapPin, LuCheck,
+  LuBanknote, LuArrowLeftRight, LuCreditCard, LuWallet, LuMapPin, LuCheck, LuKeyRound, LuWashingMachine,
+  LuFlower2, LuBug, LuHammer, LuFlame, LuLayers, LuUmbrella, LuWifi, LuCctv, LuCodeXml, LuPackage, LuDroplets,
+  LuActivity, LuBrain, LuApple, LuDumbbell, LuBath, LuGraduationCap, LuBookOpen, LuLanguages, LuMusic, LuBike,
+  LuUtensils, LuCakeSlice, LuShoppingBag, LuMegaphone, LuSprout, LuTractor, LuWheat, LuCalculator, LuScale,
+  LuPalette, LuDraftingCompass, LuPartyPopper, LuCamera, LuDisc3, LuChefHat, LuBaby, LuHandHeart, LuStore,
+  LuBriefcase, LuHardHat, LuStethoscope, LuBone, LuMilk, LuCircleHelp, LuBookA,
 } from "react-icons/lu";
 import type { IconType } from "react-icons";
-import { CategoryId, PaymentMethod, ServiceId } from "./data";
+import { CategoryId, PaymentMethod, ServiceId, serviceById } from "./data";
 import { goBack } from "./router";
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
 // ---------------------------------------------------------------------
-//  Íconos de categorías, servicios y pagos
+//  Íconos de sectores y subcategorías (solo presentación; los datos
+//  vienen de la base de datos). Si llega una subcategoría nueva se usa
+//  el ícono de su sector.
 // ---------------------------------------------------------------------
-export const CATEGORY_ICON: Record<CategoryId, IconType> = {
-  hogar: LuHouse, tecnologia: LuLaptop, construccion: LuWrench, belleza: LuPaintRoller,
-  transporte: LuCar, salud: LuHeart, mascotas: LuPawPrint, mas: LuEllipsis,
+const CAT_ICONS: Record<string, IconType> = {
+  hogar: LuHouse, construccion: LuHardHat, tecnologia: LuLaptop, belleza: LuScissors, transporte: LuCar,
+  salud: LuStethoscope, mascotas: LuPawPrint, educacion: LuGraduationCap, comercio: LuStore, agricultura: LuSprout,
+  profesionales: LuBriefcase, eventos: LuPartyPopper, mas: LuEllipsis,
 };
-export const SERVICE_ICON: Record<ServiceId, IconType> = {
-  plomeria: LuWrench, electricidad: LuZap, aire: LuAirVent, pintura: LuPaintRoller, albanileria: LuBrickWall,
-  limpieza: LuBrush, computadores: LuLaptop, celulares: LuSmartphone, peluqueria: LuScissors, manicure: LuSparkles,
-  mudanzas: LuTruck, conductor: LuCar, enfermeria: LuHeartPulse, paseo: LuDog, veterinaria: LuPawPrint,
+export const CATEGORY_ICON: Record<CategoryId, IconType> = new Proxy(CAT_ICONS, { get: (t, k: string) => t[k] ?? LuCircleHelp });
+
+const SRV_ICONS: Record<string, IconType> = {
+  plomeria: LuWrench, electricidad: LuZap, aire: LuAirVent, limpieza: LuBrush, cerrajeria: LuKeyRound,
+  electrodomesticos: LuWashingMachine, jardineria: LuFlower2, fumigacion: LuBug,
+  pintura: LuPaintRoller, albanileria: LuBrickWall, carpinteria: LuHammer, soldadura: LuFlame, drywall: LuLayers, impermeabilizacion: LuUmbrella,
+  computadores: LuLaptop, celulares: LuSmartphone, redes: LuWifi, camaras: LuCctv, desarrollo_web: LuCodeXml,
+  peluqueria: LuScissors, barberia: LuScissors, manicure: LuSparkles, maquillaje: LuPalette, depilacion: LuSparkles,
+  mudanzas: LuTruck, conductor: LuCar, mensajeria: LuPackage, mecanica: LuWrench, lavado_autos: LuDroplets,
+  enfermeria: LuHeartPulse, fisioterapia: LuActivity, psicologia: LuBrain, nutricion: LuApple, entrenador: LuDumbbell,
+  paseo: LuDog, veterinaria: LuPawPrint, peluqueria_canina: LuBath, cuidado_mascotas: LuHouse, adiestramiento: LuBone,
+  refuerzo_escolar: LuBookOpen, idiomas: LuLanguages, musica: LuMusic, preicfes: LuBookA, clases_programacion: LuCodeXml,
+  domicilios: LuBike, comida_casera: LuUtensils, reposteria: LuCakeSlice, ventas_catalogo: LuShoppingBag, marketing_redes: LuMegaphone,
+  jornaleros: LuWheat, fumigacion_cultivos: LuBug, asistencia_agro: LuSprout, maquinaria_agricola: LuTractor, veterinaria_rural: LuMilk,
+  contabilidad: LuCalculator, asesoria_legal: LuScale, diseno_grafico: LuPalette, traduccion: LuLanguages, arquitectura: LuDraftingCompass,
+  decoracion_eventos: LuPartyPopper, fotografia_video: LuCamera, musica_dj: LuDisc3, catering: LuChefHat, animacion_infantil: LuSparkles,
+  cuidado_ninos: LuBaby, adulto_mayor: LuHandHeart, mandados: LuPackage, otro: LuEllipsis,
 };
+export const SERVICE_ICON: Record<ServiceId, IconType> = new Proxy(SRV_ICONS, {
+  get: (t, k: string) => t[k] ?? CAT_ICONS[serviceById(k).category] ?? LuCircleHelp,
+});
 export const PAYMENT_ICON: Record<PaymentMethod, IconType> = {
   efectivo: LuBanknote, nequi: LuWallet, transferencia: LuArrowLeftRight, tarjeta: LuCreditCard,
 };

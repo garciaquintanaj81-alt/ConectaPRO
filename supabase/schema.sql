@@ -284,6 +284,19 @@ create table if not exists canjes (
 );
 
 -- ---------------------------------------------------------------------
+--  Migraciones (versión 2): se aplican también sobre una base ya instalada
+-- ---------------------------------------------------------------------
+alter table categorias add column if not exists corto text;
+alter table categorias add column if not exists descripcion text;
+alter table servicios add column if not exists palabras text not null default '';
+alter table solicitudes add column if not exists ubicacion_gps boolean not null default false;  -- true = coordenadas exactas del GPS
+alter table solicitudes add column if not exists precision_m int;                               -- precisión reportada por el GPS
+alter table perfiles add column if not exists verificacion jsonb;                                -- resultado de la detección facial (sin imagen)
+drop function if exists api_buscar_proveedores(text, text, text, text, boolean, text);
+drop function if exists api_publicar(text, text, text, text, double precision, double precision, text, text, boolean);
+drop function if exists api_completar_registro(text, text, text, text, text);
+
+-- ---------------------------------------------------------------------
 --  6. Seguridad: nadie accede a las tablas directamente
 -- ---------------------------------------------------------------------
 do $$
@@ -416,7 +429,8 @@ language sql stable security definer set search_path = public as $$
     'clientRating', (select jsonb_build_object('stars', estrellas, 'comment', comentario, 'at', cp_ms(creado))
                from calificaciones where solicitud_id = s.id and rol_autor = 'proveedor'),
     'finishedAt', cp_ms(s.finalizado), 'photo', s.foto,
-    'punctualityPenalty', s.penalizacion_puntualidad, 'trace', s.traza)
+    'punctualityPenalty', s.penalizacion_puntualidad, 'trace', s.traza,
+    'gps', s.ubicacion_gps, 'gpsPrecision', s.precision_m)
   from solicitudes s
   join municipios m on m.codigo = s.municipio
   join departamentos d on d.codigo = s.departamento
@@ -456,7 +470,8 @@ $$;
 create or replace function api_catalogo() returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
-    'categorias', (select jsonb_agg(jsonb_build_object('id', id, 'name', nombre) order by orden) from categorias),
+    'categorias', (select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.nombre, 'short', coalesce(c.corto, c.nombre), 'description', c.descripcion,
+                      'providers', (select count(distinct ps.proveedor_id) from proveedor_servicios ps join servicios s on s.id = ps.servicio_id where s.categoria = c.id)) order by c.orden) from categorias c),
     'servicios', (select jsonb_agg(jsonb_build_object('id', id, 'name', nombre, 'short', corto, 'category', categoria, 'photo', foto) order by orden) from servicios))
 $$;
 
@@ -493,45 +508,56 @@ language sql stable security definer set search_path = public as $$
   where pe.demo and pe.correo in (select valor from config where clave like 'demo_login_%')
 $$;
 
--- Búsqueda de proveedores por ubicación (departamento / municipio), categoría y texto
+-- Búsqueda de proveedores por ubicación administrativa (departamento / municipio),
+-- sector, subcategoría y texto. Si se envía la ubicación GPS del usuario, las
+-- distancias se calculan desde ese punto (sin cambiar el filtro de municipio).
 create or replace function api_buscar_proveedores(
   p_departamento text default null, p_municipio text default null, p_categoria text default null,
-  p_texto text default null, p_solo_ahora boolean default false, p_orden text default 'rating')
+  p_servicio text default null, p_texto text default null, p_solo_ahora boolean default false,
+  p_orden text default 'rating', p_lat double precision default null, p_lng double precision default null)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
-declare v_lat double precision; v_lng double precision; v_yo uuid := cp_yo(); v_ref text; res jsonb;
+declare v_lat double precision; v_lng double precision; v_yo uuid := cp_yo(); v_ref text; res jsonb; v_desde text := 'municipio';
 begin
   p_departamento := nullif(p_departamento, ''); p_municipio := nullif(p_municipio, '');
-  p_categoria := nullif(p_categoria, ''); p_texto := nullif(trim(coalesce(p_texto, '')), '');
+  p_categoria := nullif(p_categoria, ''); p_servicio := nullif(p_servicio, '');
+  p_texto := nullif(trim(coalesce(p_texto, '')), '');
   if p_municipio is not null then
     select m.lat, m.lng, cp_lugar(m.nombre, d.nombre) into v_lat, v_lng, v_ref
     from municipios m join departamentos d on d.codigo = m.departamento where m.codigo = p_municipio;
   elsif p_departamento is not null then
     select lat, lng, nombre into v_lat, v_lng, v_ref from departamentos where codigo = p_departamento;
   end if;
+  -- Referencia para medir distancias: el GPS del usuario si lo autorizó
+  if p_lat is not null and p_lng is not null then
+    v_desde := 'gps';
+  else
+    p_lat := v_lat; p_lng := v_lng;
+  end if;
 
   with base as (
     select p.*, pe.nombre as pnombre,
-           case when v_lat is null then null else cp_dist(v_lat, v_lng, p.lat, p.lng) end as km,
+           case when p_lat is null then null else cp_dist(p_lat, p_lng, p.lat, p.lng) end as km,
+           case when v_lat is null then null else cp_dist(v_lat, v_lng, p.lat, p.lng) end as km_zona,
            cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta) as disp
     from proveedores p join perfiles pe on pe.id = p.perfil_id
     where p.activo and (v_yo is null or p.perfil_id <> v_yo)
   ), filtrados as (
-    select b.*,
-           case when p_municipio is not null then (case when b.municipio = p_municipio then 'local' else 'cobertura' end)
-                when p_departamento is not null then 'local' else 'local' end as ubic
+    select b.*, case when p_municipio is not null and b.municipio <> p_municipio then 'cobertura' else 'local' end as ubic
     from base b
-    where (p_municipio is null or b.municipio = p_municipio or b.km <= b.cobertura_km)
+    where (p_municipio is null or b.municipio = p_municipio or b.km_zona <= b.cobertura_km)
       and (p_municipio is not null or p_departamento is null or b.departamento = p_departamento)
-      and (p_categoria is null or p_categoria = 'mas' or exists (
+      and (p_categoria is null or exists (
             select 1 from proveedor_servicios ps join servicios s on s.id = ps.servicio_id
             where ps.proveedor_id = b.id and s.categoria = p_categoria))
-      and (p_texto is null or (b.pnombre || ' ' || b.profesion || ' ' || b.empresa || ' ' || coalesce((
-            select string_agg(s.nombre, ' ') from proveedor_servicios ps join servicios s on s.id = ps.servicio_id where ps.proveedor_id = b.id), ''))
+      and (p_servicio is null or exists (select 1 from proveedor_servicios ps where ps.proveedor_id = b.id and ps.servicio_id = p_servicio))
+      and (p_texto is null or (b.pnombre || ' ' || b.profesion || ' ' || b.empresa || ' ' || b.descripcion || ' ' || coalesce((
+            select string_agg(s.nombre || ' ' || s.palabras, ' ') from proveedor_servicios ps join servicios s on s.id = ps.servicio_id where ps.proveedor_id = b.id), ''))
             ilike '%' || p_texto || '%')
       and (not p_solo_ahora or b.disp = 'ahora')
   )
   select jsonb_build_object(
     'referencia', v_ref,
+    'distanciaDesde', v_desde,
     'total', (select count(*) from filtrados),
     'resultados', coalesce((select jsonb_agg(cp_proveedor_json(f.id) || jsonb_build_object('distanceKm', round(f.km::numeric, 1), 'ubicacion', f.ubic)
         order by case when p_orden = 'distance' then f.km end asc nulls last,
@@ -572,7 +598,7 @@ $$;
 -- Se llama después de crear el usuario de autenticación
 create or replace function api_completar_registro(
   p_nombre text default null, p_documento text default null, p_celular text default null,
-  p_departamento text default null, p_municipio text default null)
+  p_departamento text default null, p_municipio text default null, p_verificacion jsonb default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid(); v uuid; v_correo text;
 begin
@@ -591,10 +617,15 @@ begin
     raise exception 'Selecciona un departamento y un municipio válidos'; end if;
   if exists (select 1 from perfiles where documento = p_documento) then raise exception 'Ya existe una cuenta con ese número de documento'; end if;
 
-  insert into perfiles (auth_id, nombre, documento, celular, correo, departamento, municipio, verificado, puntos)
-  values (uid, trim(p_nombre), p_documento, p_celular, v_correo, p_departamento, p_municipio, true, 100)
+  -- La detección facial ocurre en el dispositivo; aquí solo se guarda el resultado (nunca la imagen)
+  if coalesce((p_verificacion ->> 'rostroDetectado')::boolean, false) is not true then
+    raise exception 'Completa la validación facial: debemos detectar tu rostro frente a la cámara';
+  end if;
+  insert into perfiles (auth_id, nombre, documento, celular, correo, departamento, municipio, verificado, verificacion, puntos)
+  values (uid, trim(p_nombre), p_documento, p_celular, v_correo, p_departamento, p_municipio, true,
+          p_verificacion || jsonb_build_object('fecha', now()), 100)
   returning id into v;
-  perform cp_notificar(v, 'info', '¡Bienvenido a ConectaPRO! Tu identidad fue verificada. Ganaste 100 puntos de bienvenida.', '/perfil/beneficios');
+  perform cp_notificar(v, 'info', '¡Bienvenido a ConectaPRO! Detectamos tu rostro en la validación facial. Ganaste 100 puntos de bienvenida.', '/perfil/beneficios');
   return cp_cuenta_json(v);
 end $$;
 
@@ -734,7 +765,7 @@ end $$;
 create or replace function api_guardar_proveedor(p_datos jsonb) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); pid uuid; v_lat double precision; v_lng double precision; s text; img text; i int := 0;
-  v_dias int[]; v_desde int; v_hasta int;
+  v_dias int[]; v_desde int; v_hasta int; v_gps boolean := false;
 begin
   if length(trim(coalesce(p_datos->>'company', ''))) < 2 then raise exception 'Escribe el nombre de tu empresa, emprendimiento o marca'; end if;
   if jsonb_array_length(coalesce(p_datos->'services', '[]'::jsonb)) = 0 then raise exception 'Selecciona al menos una categoría de servicio'; end if;
@@ -746,13 +777,19 @@ begin
   if v_hasta <= v_desde then raise exception 'La hora de cierre debe ser posterior a la de apertura'; end if;
   if length(trim(coalesce(p_datos->>'about', ''))) < 15 then raise exception 'Describe lo que haces (mínimo 15 caracteres)'; end if;
   if (p_datos->>'priceMax')::int < (p_datos->>'priceMin')::int then raise exception 'El precio máximo debe ser mayor o igual al mínimo'; end if;
+  -- Punto GPS opcional: solo si está dentro del municipio elegido (menos de 25 km de su centro)
+  v_gps := p_datos ? 'lat' and p_datos ? 'lng'
+           and cp_dist((p_datos->>'lat')::double precision, (p_datos->>'lng')::double precision, v_lat, v_lng) < 25;
 
   pid := cp_mi_proveedor(yo);
   if pid is null then
     insert into proveedores (perfil_id, empresa, profesion, departamento, municipio, lat, lng, cobertura_km, dias, hora_desde, hora_hasta,
                              precio_min, precio_max, descripcion, ofrece, telefono, calificacion, num_resenas)
     values (yo, trim(p_datos->>'company'), coalesce(nullif(trim(p_datos->>'profession'), ''), 'Proveedor'),
-            p_datos->>'departamento', p_datos->>'municipio', v_lat, v_lng, (p_datos->>'coverageKm')::int, v_dias, v_desde, v_hasta,
+            p_datos->>'departamento', p_datos->>'municipio',
+            case when v_gps then (p_datos->>'lat')::double precision else v_lat end,
+            case when v_gps then (p_datos->>'lng')::double precision else v_lng end,
+            (p_datos->>'coverageKm')::int, v_dias, v_desde, v_hasta,
             (p_datos->>'priceMin')::int, (p_datos->>'priceMax')::int, trim(p_datos->>'about'),
             array(select jsonb_array_elements_text(coalesce(p_datos->'offers', '[]'::jsonb))),
             (select celular from perfiles where id = yo), 5.0, 0)
@@ -761,8 +798,8 @@ begin
     update proveedores set empresa = trim(p_datos->>'company'),
       profesion = coalesce(nullif(trim(p_datos->>'profession'), ''), profesion),
       departamento = p_datos->>'departamento', municipio = p_datos->>'municipio',
-      lat = case when municipio = p_datos->>'municipio' then lat else v_lat end,
-      lng = case when municipio = p_datos->>'municipio' then lng else v_lng end,
+      lat = case when v_gps then (p_datos->>'lat')::double precision when municipio = p_datos->>'municipio' then lat else v_lat end,
+      lng = case when v_gps then (p_datos->>'lng')::double precision when municipio = p_datos->>'municipio' then lng else v_lng end,
       cobertura_km = (p_datos->>'coverageKm')::int, dias = v_dias, hora_desde = v_desde, hora_hasta = v_hasta,
       precio_min = (p_datos->>'priceMin')::int, precio_max = (p_datos->>'priceMax')::int, descripcion = trim(p_datos->>'about'),
       ofrece = array(select jsonb_array_elements_text(coalesce(p_datos->'offers', '[]'::jsonb)))
@@ -795,11 +832,12 @@ end $$;
 create or replace function api_publicar(
   p_descripcion text, p_servicio text, p_departamento text, p_municipio text,
   p_lat double precision default null, p_lng double precision default null,
-  p_direccion text default '', p_pago text default 'efectivo', p_propuestas boolean default true)
+  p_direccion text default '', p_pago text default 'efectivo', p_propuestas boolean default true,
+  p_precision int default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   yo uuid := cp_req(); v_id uuid; v_lat double precision; v_lng double precision; v_titulo text; v_serv text;
-  tr jsonb; n int := 0; r record; i int := 0; auto boolean;
+  tr jsonb; n int := 0; r record; i int := 0; auto boolean; v_gps boolean := false;
 begin
   perform cp_no_suspendido(yo);
   if length(trim(coalesce(p_descripcion, ''))) < 10 then raise exception 'Describe tu necesidad (mínimo 10 caracteres)'; end if;
@@ -808,8 +846,12 @@ begin
   if v_serv is null then raise exception 'Selecciona una categoría de servicio válida'; end if;
   select lat, lng into v_lat, v_lng from municipios where codigo = p_municipio and departamento = p_departamento;
   if not found then raise exception 'Selecciona un departamento y un municipio válidos'; end if;
-  -- Si el GPS está dentro del municipio elegido, se usa la ubicación exacta
-  if p_lat is not null and p_lng is not null and cp_dist(p_lat, p_lng, v_lat, v_lng) < 25 then v_lat := p_lat; v_lng := p_lng; end if;
+  if length(trim(coalesce(p_direccion, ''))) < 5 then raise exception 'Escribe la dirección donde se prestará el servicio'; end if;
+  -- El municipio (división administrativa) lo elige la persona. El GPS solo se usa para
+  -- precisar el punto si está dentro de ese municipio (a menos de 25 km de su centro).
+  if p_lat is not null and p_lng is not null and cp_dist(p_lat, p_lng, v_lat, v_lng) < 25 then
+    v_lat := p_lat; v_lng := p_lng; v_gps := true;
+  end if;
   if p_pago not in ('efectivo', 'nequi', 'transferencia', 'tarjeta') then raise exception 'Método de pago no válido'; end if;
 
   v_titulo := left(trim(regexp_replace(trim(p_descripcion), '[.,\n].*$', '')), 48);
@@ -823,9 +865,9 @@ begin
     'bySchedule', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo) where disponibilidad <> 'otro'));
 
   insert into solicitudes (cliente_id, titulo, descripcion, servicio_id, departamento, municipio, lat, lng, direccion,
-                           metodo_pago, recibir_propuestas, foto, traza)
-  values (yo, v_titulo, trim(p_descripcion), p_servicio, p_departamento, p_municipio, v_lat, v_lng, coalesce(trim(p_direccion), ''),
-          p_pago, p_propuestas, (select foto from servicios where id = p_servicio), tr)
+                           metodo_pago, recibir_propuestas, foto, traza, ubicacion_gps, precision_m)
+  values (yo, v_titulo, trim(p_descripcion), p_servicio, p_departamento, p_municipio, v_lat, v_lng, trim(p_direccion),
+          p_pago, p_propuestas, (select foto from servicios where id = p_servicio), tr, v_gps, case when v_gps then p_precision end)
   returning id into v_id;
 
   select coalesce((select valor = 'true' from config where clave = 'auto_respuesta_demo'), true) into auto;
@@ -848,7 +890,7 @@ begin
   end loop;
 
   perform cp_notificar(yo, 'match', format('Notificamos a %s proveedores compatibles para "%s"', n, v_titulo), '/buscando/' || v_id);
-  return jsonb_build_object('id', v_id, 'notificados', n, 'trace', tr);
+  return jsonb_build_object('id', v_id, 'notificados', n, 'trace', tr, 'gps', v_gps);
 end $$;
 
 create or replace function api_editar_solicitud(p_id uuid, p_descripcion text, p_pago text, p_direccion text default null) returns jsonb
@@ -1172,13 +1214,13 @@ end $$;
 revoke execute on all functions in schema public from public, anon, authenticated;
 grant execute on function
   api_catalogo(), api_departamentos(), api_municipios(text), api_municipio_cercano(double precision, double precision),
-  api_aliados(), api_demo_cuentas(), api_buscar_proveedores(text, text, text, text, boolean, text), api_proveedor(uuid),
+  api_aliados(), api_demo_cuentas(), api_buscar_proveedores(text, text, text, text, text, boolean, text, double precision, double precision), api_proveedor(uuid),
   api_vista_previa(text, text), api_trueque_buscar(text, text, text)
 to anon, authenticated;
 grant execute on function
-  api_completar_registro(text, text, text, text, text), api_set_modo(text), api_actualizar_perfil(jsonb),
+  api_completar_registro(text, text, text, text, text, jsonb), api_set_modo(text), api_actualizar_perfil(jsonb),
   api_preferencias(boolean, boolean, boolean), api_eliminar_cuenta(), api_estado(), api_guardar_proveedor(jsonb),
-  api_publicar(text, text, text, text, double precision, double precision, text, text, boolean),
+  api_publicar(text, text, text, text, double precision, double precision, text, text, boolean, int),
   api_editar_solicitud(uuid, text, text, text), api_eliminar_solicitud(uuid), api_postular(uuid, int, text), api_descartar(uuid),
   api_confirmar_acuerdo(uuid, uuid, date, text, int), api_calificar(uuid, int, text), api_extender_plazo(uuid),
   api_cancelar(uuid, boolean), api_no_asistir(uuid), api_abrir_conversacion(uuid, uuid), api_enviar_mensaje(uuid, text, text),

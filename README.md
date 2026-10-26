@@ -27,10 +27,11 @@ Navegador (React + TypeScript + Tailwind)  ──HTTPS──▶  Supabase
 
 | Módulo | Qué hace |
 |---|---|
-| Registro e inicio de sesión | Cuenta con correo y contraseña, documento, celular, **departamento y municipio** (listas encadenadas) y validación facial |
+| Registro e inicio de sesión | Cuenta con correo y contraseña, documento, celular, **departamento y municipio** (listas encadenadas) y **detección facial real** con la cámara (ver abajo) |
 | Roles dinámicos | La misma persona puede ser cliente y proveedor |
-| Explorar | Filtro por **departamento → municipio** (solo aparecen los municipios del departamento elegido), categoría, texto y disponibilidad. Muestra los proveedores ubicados en el municipio y los de municipios vecinos cuya cobertura lo incluye |
-| Publicar solicitud | Departamento, municipio, dirección, GPS (detecta el municipio más cercano), categoría y método de pago |
+| Explorar | Filtro por **departamento → municipio**, **sector → subcategoría**, texto (nombre, profesión, servicios y palabras clave), disponibilidad y "Cerca de mí" (GPS). Muestra los proveedores del municipio y los de municipios vecinos cuya cobertura lo incluye |
+| Publicar necesidad | 1) sector y subcategoría, 2) descripción, 3) departamento, municipio y **dirección obligatoria**, GPS opcional, 4) método de pago |
+| Catálogo | 13 sectores y 68 subcategorías: hogar, construcción, tecnología, belleza, transporte, salud, mascotas, educación, comercio, agricultura, servicios profesionales, eventos y otros |
 | Algoritmo de emparejamiento | Categoría + distancia (Haversine) dentro de la cobertura + horario; ordena por reputación y cercanía |
 | Postulaciones y acuerdos | El proveedor propone precio; el cliente elige y se genera el contrato digital con código |
 | Mensajería | Chat entre cliente y proveedor con fotos |
@@ -39,9 +40,19 @@ Navegador (React + TypeScript + Tailwind)  ──HTTPS──▶  Supabase
 | Trueque, IA predictiva y beneficios | Ofertas de trueque, sugerencia de servicios recurrentes y canje de puntos |
 | CRUD completo | Crear, consultar, editar y eliminar: perfil, servicio del proveedor y portafolio, solicitudes, direcciones, métodos de pago, ofertas de trueque y la cuenta |
 
-**Datos de ejemplo:** se cargan 40 proveedores en 13 municipios (Rionegro, Medellín, Cúcuta, Villa del Rosario, Los Patios, Pamplona, Ocaña, Bucaramanga, Floridablanca, Bogotá, Cali, Barranquilla, Cartagena) y solicitudes abiertas. Los proveedores de ejemplo que no tienen cuenta de acceso responden automáticamente a las solicitudes para que la plataforma se pueda probar; los usuarios reales responden desde su propia cuenta. Se desactiva con `update config set valor = 'false' where clave = 'auto_respuesta_demo';`.
+**Datos de ejemplo:** se cargan 68 proveedores de todos los sectores en 13 municipios (Rionegro, Medellín, Cúcuta, Villa del Rosario, Los Patios, Pamplona, Ocaña, Bucaramanga, Floridablanca, Bogotá, Cali, Barranquilla, Cartagena) y solicitudes abiertas. Los proveedores de ejemplo que no tienen cuenta de acceso responden automáticamente a las solicitudes para que la plataforma se pueda probar; los usuarios reales responden desde su propia cuenta. Se desactiva con `update config set valor = 'false' where clave = 'auto_respuesta_demo';`.
 
 **Cuentas de demostración** (contraseña `Conecta2026*`): daniela@conectapro.co y juan@conectapro.co (clientes), carlos@conectapro.co y andres@conectapro.co (proveedores). También aparecen como botones en *Iniciar sesión*.
+
+### Ubicación: municipio administrativo vs. GPS
+
+El **municipio** que elige el usuario es siempre el dato administrativo (obligatorio, junto con la dirección). La ubicación GPS se pide **solo con autorización** del navegador y se usa únicamente como punto exacto para calcular distancias, y solo si está a menos de 25 km del municipio elegido. Si el GPS indica otro municipio, se avisa y no se usa a menos que el usuario cambie el municipio. Se guarda aparte (`ubicacion_gps`, `precision_m`).
+
+### Detección facial: qué hace y sus limitaciones
+
+Usa [pico.js](https://github.com/nenadmarkus/picojs) (licencia MIT) **en el navegador**: la imagen nunca se envía ni se guarda; al servidor solo llega el resultado (rostro detectado, cuadros válidos, movimiento, brillo y nitidez). Verifica que haya **un solo rostro**, con luz y nitidez suficientes, centrado, a buena distancia y con **movimiento natural de la cabeza**. Si no hay cámara, se puede validar con una selfie.
+
+Limitaciones: **no reconoce la identidad** de la persona ni la compara con su documento, y una foto o video puesto frente a la cámara podría pasar la prueba. Una verificación de identidad real requiere un servicio biométrico especializado (fase futura).
 
 ## Instalación de la base de datos (Supabase)
 

@@ -2,17 +2,17 @@ import { useMemo, useRef, useState } from "react";
 import {
   LuSlidersHorizontal, LuMapPin, LuClock, LuChevronRight, LuCheck, LuX, LuWrench, LuCircleCheck, LuBriefcase,
   LuMessageCircle, LuTriangleAlert, LuCalendarDays, LuCircleDollarSign, LuCreditCard, LuUserRound, LuImagePlus,
-  LuTrash2, LuStore, LuRadar, LuTimer, LuFileText, LuClipboardList, LuSend, LuChevronDown,
+  LuTrash2, LuStore, LuRadar, LuTimer, LuFileText, LuClipboardList, LuSend, LuChevronDown, LuLocateFixed,
 } from "react-icons/lu";
 import { AppShell, MobileTopBar } from "../Layout";
 import { Request, useStore } from "../store";
 import { Link, navigate } from "../router";
 import {
   Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars,
-  PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, cx, shortDate, timeAgo,
+  PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, CATEGORY_ICON, agreementWhen, cx, shortDate, timeAgo,
 } from "../ui";
 import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, money, serviceById, CATEGORIES } from "../data";
-import { UbicacionSelect } from "../geo";
+import { UbicacionSelect, useGeolocation, GEO_MSG } from "../geo";
 import { useBusy } from "../store";
 import { distanceKm, scheduleLabel } from "../matching";
 import { ContractModal, Info } from "./Client";
@@ -41,18 +41,18 @@ export function ProviderHome() {
   return (
     <AppShell wide>
       <MobileTopBar />
-      <h1 className="text-[42px] font-extrabold leading-tight tracking-tight">Hola, {account?.name.split(" ")[0]}</h1>
-      <p className="text-2xl text-ink-soft">Aquí están tus oportunidades</p>
+      <h1 className="text-[28px] font-extrabold leading-tight tracking-tight sm:text-[32px]">Hola, {account?.name.split(" ")[0]}</h1>
+      <p className="mt-1 text-ink-soft">Aquí están tus oportunidades</p>
 
       <div className="mt-6 grid grid-cols-3 gap-3 sm:gap-4 lg:max-w-2xl">
         {[
-          [nuevas.length, "Nuevas", "bg-[#ece9ff] text-[#4b3fc4]", "/oportunidades"],
-          [enCurso, "En curso", "bg-[#e3efff] text-brand-blue", "/trabajos"],
-          [completadas, "Completadas", "bg-[#e3f6ee] text-[#18794e]", "/trabajos"],
+          [nuevas.length, "Nuevas", "bg-brand", "/oportunidades"],
+          [enCurso, "En curso", "bg-brand-blue", "/trabajos"],
+          [completadas, "Completadas", "bg-ok", "/trabajos"],
         ].map(([n, l, c, to]: any) => (
-          <Link key={l} to={to} className={cx("rounded-3xl px-2 py-5 text-center transition hover:-translate-y-0.5", c)}>
-            <div className="text-3xl font-extrabold text-ink sm:text-4xl">{n}</div>
-            <div className="mt-1 text-[15px] font-medium sm:text-lg">{l}</div>
+          <Link key={l} to={to} className="card min-w-0 px-3 py-3 transition hover:ring-brand/40 sm:px-4 sm:py-3.5">
+            <div className="text-2xl font-extrabold text-ink">{n}</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-ink-soft sm:text-[13px]"><span className={cx("h-2 w-2 shrink-0 rounded-full", c)} />{l}</div>
           </Link>
         ))}
       </div>
@@ -60,10 +60,9 @@ export function ProviderHome() {
       <div className="mt-8 grid gap-8 xl:grid-cols-[1fr_330px]">
         <div className="min-w-0">
           <SectionTitle action={
-            <Link to="/oportunidades" className="flex h-14 w-16 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-line xl:hidden" aria-label="Filtros"><LuSlidersHorizontal className="h-6 w-6" /></Link>
-          }><span className="text-[21px] sm:text-2xl">Oportunidades cerca de ti</span></SectionTitle>
-          <p className="-mt-2 mb-4 hidden text-ink-soft lg:block">Encuentra clientes que necesitan tus servicios ahora.</p>
-          <div className="space-y-4">
+            <Link to="/oportunidades" className="flex h-10 w-10 items-center justify-center rounded-xl bg-white ring-1 ring-line xl:hidden" aria-label="Filtros"><LuSlidersHorizontal className="h-5 w-5" /></Link>
+          }><span className="text-lg sm:text-xl">Oportunidades cerca de ti</span></SectionTitle>
+          <div className="space-y-3">
             {list.map((o) => <OpportunityCard key={o.r.id} r={o.r} distance={o.distance} />)}
             {list.length === 0 && <Empty icon={LuRadar} title="Sin oportunidades nuevas" text="Te notificaremos cuando un cliente compatible publique una solicitud en tu zona." />}
           </div>
@@ -96,14 +95,6 @@ export function ProviderHome() {
             <MapMock className="h-48 rounded-none ring-0" pins={list.slice(0, 5).map((o, i) => ({ x: 50 + (o.r.location.lng - myProvider.lng) * 900, y: 50 - (o.r.location.lat - myProvider.lat) * 900 + i * 2 }))} />
             <div className="flex items-center gap-2 p-4 text-sm"><LuMapPin className="h-4 w-4 text-brand" /> Tu ubicación · <b>{myProvider.city}</b></div>
           </div>
-          <div className="card flex items-center gap-4 overflow-hidden p-4">
-            <img src="img/worker.jpg" alt="" className="h-24 w-24 rounded-2xl object-cover" />
-            <div>
-              <div className="font-extrabold leading-tight">Más clientes cerca de ti</div>
-              <p className="text-xs text-ink-soft">Mantén tu perfil actualizado y aumenta tus oportunidades.</p>
-              <Button variant="outline" className="mt-2 px-3 py-2 text-sm" onClick={() => navigate("/mi-servicio")}>Editar mi perfil</Button>
-            </div>
-          </div>
         </aside>
       </div>
     </AppShell>
@@ -121,29 +112,26 @@ function OpportunityCard({ r, distance }: { r: Request; distance: number }) {
   return (
     <div className="card animate-fade-up p-4 sm:p-5">
       <Link to={"/oportunidad/" + r.id} className="flex gap-4">
-        <Avatar name={c.name} photo={c.photo} size={96} dot="on" className="hidden sm:block" />
-        <Avatar name={c.name} photo={c.photo} size={76} dot="on" className="sm:hidden" />
+        <Avatar name={c.name} photo={c.photo} size={56} dot="on" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            {isNew ? <Badge tone="solidOk" className="px-4 text-base">Nueva</Badge> : <span className="text-xl font-extrabold">{serviceById(r.service).name}</span>}
+            <span className="text-base font-bold">{serviceById(r.service).name}</span>{isNew && <Badge tone="ok">Nueva</Badge>}
             <span className="ml-auto hidden text-sm text-ink-soft lg:inline">{c.name.split(" ")[0]} {c.name.split(" ")[1]?.[0]}. · <Rating value={c.rating} className="text-sm" /></span>
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <span className="inline-flex items-center gap-1.5 text-lg font-medium text-brand-blue"><LuMapPin className="h-5 w-5 fill-warn text-white" />A {distance.toFixed(1)} km</span>
-            <span className="inline-flex items-center gap-1.5 text-lg text-ink-soft"><LuClock className="h-5 w-5" />{timeAgo(r.createdAt)}</span>
-          </div>
-          <p className="mt-1.5 text-lg leading-snug text-ink-soft">{r.desc}</p>
-          <div className="mt-2 flex items-center justify-between">
-            <span className="inline-flex items-center gap-2 text-lg font-medium"><PIcon className={cx("h-6 w-6", PAYMENT_COLOR[r.payment])} />{PAYMENTS[r.payment].split(" ")[0]}</span>
-            <LuChevronRight className="h-7 w-7 text-brand-blue lg:hidden" />
+          <p className="mt-1 line-clamp-2 text-[15px] leading-snug text-ink-soft">{r.desc}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-soft">
+            <span className="inline-flex items-center gap-1 font-semibold text-brand-blue"><LuMapPin className="h-4 w-4" />{distance.toFixed(1)} km</span>
+            <span className="inline-flex items-center gap-1"><LuClock className="h-4 w-4" />{timeAgo(r.createdAt)}</span>
+            <span className="inline-flex items-center gap-1"><PIcon className={cx("h-4 w-4", PAYMENT_COLOR[r.payment])} />{PAYMENTS[r.payment].split(" ")[0]}</span>
+            <LuChevronRight className="ml-auto h-5 w-5 text-ink-soft lg:hidden" />
           </div>
         </div>
       </Link>
-      <div className="mt-4 hidden gap-3 border-t border-line pt-4 lg:flex">
+      <div className="mt-3 hidden items-center gap-2 border-t border-line pt-3 lg:flex">
         {applied ? <Badge tone="ok" icon={LuCircleCheck}>Postulado · esperando al cliente</Badge> : (
           <>
-            <Button className="px-5 py-2.5" icon={LuCheck} disabled={busy} onClick={() => wrap(async () => { await applyTo(r.id, suggested); toast(`Te postulaste con ${money(suggested)}`); })}>Aceptar</Button>
-            <Button variant="outline" className="px-5 py-2.5" icon={LuX} disabled={busy} onClick={() => wrap(async () => { await decline(r.id); toast("Oportunidad descartada"); })}>Descartar</Button>
+            <Button className="px-4 py-2 text-sm" icon={LuCheck} disabled={busy} onClick={() => wrap(async () => { await applyTo(r.id, suggested); toast(`Te postulaste con ${money(suggested)}`); })}>Aceptar</Button>
+            <Button variant="outline" className="px-4 py-2 text-sm" icon={LuX} disabled={busy} onClick={() => wrap(async () => { await decline(r.id); toast("Oportunidad descartada"); })}>Descartar</Button>
             <Link to={"/oportunidad/" + r.id} className="ml-auto self-center text-sm font-semibold text-brand">Ver detalle y proponer precio →</Link>
           </>
         )}
@@ -401,6 +389,8 @@ export function MyService() {
   const [profession, setProfession] = useState(p?.profession ?? "");
   const [services, setServices] = useState<ServiceId[]>(p?.services ?? []);
   const [ubic, setUbic] = useState({ departamento: p?.departamento ?? account?.departamento ?? "", municipio: p?.municipio ?? account?.municipio ?? "" });
+  const [openCat, setOpenCat] = useState<string>(p?.services[0] ? serviceById(p.services[0]).category : "");
+  const geo = useGeolocation();
   const [coverage, setCoverage] = useState(p?.coverageKm ?? 10);
   const [days, setDays] = useState<number[]>(p?.schedule.days ?? [1, 2, 3, 4, 5, 6]);
   const [from, setFrom] = useState(p?.schedule.from ?? 8);
@@ -431,6 +421,7 @@ export function MyService() {
         company: company.trim(), profession: profession.trim() || serviceById(services[0]).name,
         services, departamento: ubic.departamento, municipio: ubic.municipio, coverageKm: coverage,
         days: [...days].sort(), from, to, priceMin, priceMax, about: about.trim(),
+        ...(geo.fix ? { lat: geo.fix.lat, lng: geo.fix.lng } : {}),
         offers: offers.split("\n").map((s) => s.trim()).filter(Boolean), portfolio: gallery,
       });
       toast(isNew ? "¡Perfil de proveedor creado! Ya puedes recibir oportunidades" : "Cambios guardados");
@@ -456,22 +447,48 @@ export function MyService() {
         </section>
 
         <section className="card p-6">
-          <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuWrench className="h-5 w-5 text-brand" /> Categorías de servicio</h2>
-          <p className="text-sm text-ink-soft">El algoritmo solo te notificará solicitudes de estas categorías.</p>
-          {CATEGORIES.filter((c) => c.id !== "mas").map((c) => (
-            <div key={c.id} className="mt-4">
-              <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-soft">{c.name}</div>
-              <div className="flex flex-wrap gap-2">
-                {SERVICES.filter((s) => s.category === c.id).map((s) => <Chip key={s.id} active={services.includes(s.id)} onClick={() => setServices(toggle(services, s.id))}>{s.name}</Chip>)}
-              </div>
+          <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuWrench className="h-5 w-5 text-brand" /> Sectores y subcategorías</h2>
+          <p className="text-sm text-ink-soft">El algoritmo solo te notificará necesidades de las subcategorías que marques.</p>
+          {services.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {services.map((id) => <span key={id} className="rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand">{serviceById(id).name}</span>)}
             </div>
-          ))}
+          )}
+          <div className="mt-4 divide-y divide-line rounded-xl ring-1 ring-line">
+            {CATEGORIES.map((c) => {
+              const subs = SERVICES.filter((s) => s.category === c.id);
+              const n = subs.filter((s) => services.includes(s.id)).length;
+              const open = openCat === c.id;
+              const I = CATEGORY_ICON[c.id];
+              return (
+                <div key={c.id}>
+                  <button type="button" onClick={() => setOpenCat(open ? "" : c.id)} className="flex w-full items-center gap-3 px-4 py-3 text-left">
+                    <span className={cx("flex h-8 w-8 items-center justify-center rounded-lg", c.tint)}><I className="h-4 w-4" /></span>
+                    <span className="flex-1 text-sm font-semibold">{c.name}</span>
+                    {n > 0 && <span className="rounded-full bg-brand px-2 text-xs font-bold text-white">{n}</span>}
+                    <LuChevronDown className={cx("h-4 w-4 transition", open && "rotate-180")} />
+                  </button>
+                  {open && (
+                    <div className="flex flex-wrap gap-2 px-4 pb-4">
+                      {subs.map((s) => <Chip key={s.id} active={services.includes(s.id)} onClick={() => setServices(toggle(services, s.id))}>{s.name}</Chip>)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </section>
 
         <section className="card space-y-4 p-6">
           <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuRadar className="h-5 w-5 text-brand" /> Ubicación y cobertura</h2>
           <div className="text-sm font-semibold">Departamento y municipio base</div>
-          <UbicacionSelect value={ubic} onChange={setUbic} />
+          <UbicacionSelect variant="compact" value={ubic} onChange={setUbic} />
+          <div className="flex flex-col gap-3 rounded-xl bg-surface p-3 text-sm sm:flex-row sm:items-center">
+            <LuLocateFixed className="hidden h-5 w-5 shrink-0 text-brand sm:block" />
+            <p className="min-w-0 flex-1 text-ink-soft">{geo.fix ? `Punto de atención tomado del GPS (±${geo.fix.accuracy} m). Solo se aplica si está dentro del municipio elegido.` : "Opcional: usa tu ubicación actual como punto de atención para calcular distancias reales."}</p>
+            {!geo.fix && <Button type="button" variant="soft" className="rounded-xl px-4 py-2 text-sm" onClick={() => geo.request()}>{geo.status === "pidiendo" ? "Ubicando…" : "Usar mi ubicación"}</Button>}
+            {GEO_MSG[geo.status] && <p className="w-full text-xs text-bad">{GEO_MSG[geo.status]}</p>}
+          </div>
           <label className="block text-sm font-semibold">Zona de cobertura: <span className="text-brand">hasta {coverage} km</span>
             <input type="range" min={1} max={50} value={coverage} onChange={(e) => setCoverage(+e.target.value)} className="mt-3 w-full accent-brand" />
           </label>

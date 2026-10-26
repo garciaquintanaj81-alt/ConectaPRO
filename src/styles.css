@@ -12,7 +12,7 @@
   --color-brand-violet: #6a2cf0;
   --color-brand-50: #eef0ff;
   --color-brand-100: #e2e6ff;
-  --color-surface: #f5f6fe;    /* fondo general */
+  --color-surface: #f6f7fb;    /* fondo general */
   --color-line: #e6e8f5;
   --color-ok: #16a34a;
   --color-ok-50: #e3f7ea;
@@ -41,10 +41,10 @@
   color: transparent;
 }
 @utility card {
-  @apply rounded-3xl bg-white shadow-[0_6px_24px_-12px_rgba(30,40,120,0.18)] ring-1 ring-line/70;
+  @apply rounded-2xl bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)] ring-1 ring-line;
 }
 @utility shadow-brand {
-  box-shadow: 0 12px 28px -10px rgba(59, 78, 245, 0.55);
+  box-shadow: 0 6px 16px -8px rgba(59, 78, 245, 0.45);
 }
 @utility scrollbar-none {
   scrollbar-width: none;

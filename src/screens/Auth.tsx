@@ -9,6 +9,7 @@ import { navigate, Link, goBack } from "../router";
 import { Button, Field, Logo, Stepper, cx, inputCls, Avatar } from "../ui";
 import { rpc } from "../api";
 import { UbicacionSelect } from "../geo";
+import { CHECK_MSG, Check, FrameAnalysis, VerificationResult, createAnalyzer, evaluate, loadDetector } from "../face/detector";
 import { SimulatorLink } from "./Simulator";
 
 // ---------------------------------------------------------------------
@@ -205,8 +206,7 @@ export function Register() {
   const [step, setStep] = useState(0);
   const [f, setF] = useState({ name: "", document: "", phone: "", email: "", password: "" });
   const [ubic, setUbic] = useState({ departamento: "", municipio: "" });
-  const [faceOk, setFaceOk] = useState(false);
-  const [scanning, setScanning] = useState(false);
+  const [verif, setVerif] = useState<VerificationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [serverErr, setServerErr] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -229,13 +229,13 @@ export function Register() {
 
   const startFace = () => { if (validate()) { setServerErr(""); setStep(1); } };
 
-  const finish = async () => {
+  const finish = async (v: VerificationResult) => {
     setBusy(true); setServerErr("");
     try {
-      await register({ ...f, phone: f.phone.replace(/\D/g, ""), ...ubic });
+      await register({ ...f, phone: f.phone.replace(/\D/g, ""), ...ubic, verification: v });
       setStep(2);
     } catch (e: any) {
-      setServerErr(e.message); setStep(0); setFaceOk(false);
+      setServerErr(e.message); setStep(0); setVerif(null);
     } finally { setBusy(false); }
   };
 
@@ -299,12 +299,10 @@ export function Register() {
 
       {step === 1 && (
         <FaceScan
-          ok={faceOk}
-          scanning={scanning}
           busy={busy}
-          onStart={() => { setScanning(true); setTimeout(() => { setScanning(false); setFaceOk(true); }, 3200); }}
-          onBack={() => { setStep(0); setFaceOk(false); }}
-          onContinue={finish}
+          result={verif}
+          onBack={() => { setStep(0); setVerif(null); }}
+          onDone={(r) => { if (verif) finish(r); else setVerif(r); }}
         />
       )}
 
@@ -320,42 +318,147 @@ export function Register() {
   );
 }
 
-function FaceScan({ ok, scanning, busy, onStart, onBack, onContinue }: { ok: boolean; scanning: boolean; busy?: boolean; onStart: () => void; onBack: () => void; onContinue: () => void }) {
+function FaceScan({ busy, onBack, onDone, result }: { busy?: boolean; onBack: () => void; onDone: (r: VerificationResult) => void; result: VerificationResult | null }) {
   const video = useRef<HTMLVideoElement>(null);
-  const [camera, setCamera] = useState<"pending" | "on" | "off">("pending");
+  const overlay = useRef<HTMLCanvasElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [camera, setCamera] = useState<"pendiente" | "activa" | "denegada" | "no-disponible">("pendiente");
+  const [phase, setPhase] = useState<"listo" | "rostro" | "movimiento" | "hecho" | "fallo">("listo");
+  const [msg, setMsg] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [detectorErr, setDetectorErr] = useState("");
+  const run = useRef({ active: false, good: 0, scores: [] as number[], xs: [] as number[], start: 0, last: "ok" as Check, bright: 0, sharp: 0 });
+
   useEffect(() => {
     let stream: MediaStream | null = null;
-    if (navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-        .then((s) => { stream = s; if (video.current) { video.current.srcObject = s; setCamera("on"); } })
-        .catch(() => setCamera("off"));
-    } else setCamera("off");
-    return () => stream?.getTracks().forEach((t) => t.stop());
+    loadDetector().catch((e) => setDetectorErr(e.message));
+    if (!navigator.mediaDevices?.getUserMedia) { setCamera("no-disponible"); return; }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } } })
+      .then((st) => { stream = st; if (video.current) { video.current.srcObject = st; setCamera("activa"); } })
+      .catch((e) => setCamera(e?.name === "NotAllowedError" ? "denegada" : "no-disponible"));
+    return () => { run.current.active = false; stream?.getTracks().forEach((t) => t.stop()); };
   }, []);
 
+  const drawBox = (a: FrameAnalysis, ok: boolean) => {
+    const cv = overlay.current, v = video.current;
+    if (!cv || !v) return;
+    cv.width = cv.clientWidth; cv.height = cv.clientHeight;
+    const g = cv.getContext("2d")!;
+    g.clearRect(0, 0, cv.width, cv.height);
+    // El video se muestra "cover" dentro del marco: se calcula la escala real
+    const scale = Math.max(cv.width / a.width, cv.height / a.height);
+    const ox = (cv.width - a.width * scale) / 2, oy = (cv.height - a.height * scale) / 2;
+    for (const f of a.faces.slice(0, 3)) {
+      const x = cv.width - (ox + f.col * scale), y = oy + f.row * scale, r = (f.size * scale) / 2; // espejo horizontal
+      g.strokeStyle = ok ? "#16a34a" : "#f59e0b"; g.lineWidth = 3;
+      g.beginPath(); g.ellipse(x, y, r * 0.8, r, 0, 0, Math.PI * 2); g.stroke();
+    }
+  };
+
+  const start = async () => {
+    setDetectorErr("");
+    let classify;
+    try { classify = await loadDetector(); } catch (e: any) { setDetectorErr(e.message); return; }
+    const analyze = createAnalyzer(classify, { video: true });
+    const R = run.current;
+    Object.assign(R, { active: true, good: 0, scores: [], xs: [], start: Date.now(), last: "sin-rostro" });
+    setPhase("rostro"); setProgress(0); setMsg("Mira de frente a la cámara…");
+    let lastT = 0;
+    const loop = (t: number) => {
+      if (!R.active) return;
+      const v = video.current;
+      if (v && v.readyState >= 2 && t - lastT > 90) {
+        lastT = t;
+        const a = analyze(v, v.videoWidth, v.videoHeight);
+        const c = evaluate(a);
+        drawBox(a, c === "ok");
+        R.last = c; R.bright = a.brightness; R.sharp = a.sharpness;
+        if (c === "ok") {
+          R.good++; R.scores.push(a.faces[0].score); R.xs.push(a.faces[0].col / a.width);
+        } else {
+          R.good = Math.max(0, R.good - 2);
+        }
+        const moveRange = R.xs.length > 3 ? Math.max(...R.xs.slice(-40)) - Math.min(...R.xs.slice(-40)) : 0;
+        if (R.good < 12) {
+          setPhase("rostro"); setMsg(c === "ok" ? "Rostro detectado. Mantente quieto…" : CHECK_MSG[c]);
+          setProgress(Math.min(50, (R.good / 12) * 50));
+        } else if (moveRange < 0.07) {
+          setPhase("movimiento"); setMsg(c === "ok" ? "Ahora mueve la cabeza lentamente hacia un lado y luego al otro." : CHECK_MSG[c]);
+          setProgress(50 + Math.min(45, (moveRange / 0.07) * 45));
+        } else {
+          R.active = false;
+          setProgress(100); setPhase("hecho"); setMsg("¡Listo! Detectamos tu rostro y movimiento natural.");
+          onDone({
+            rostroDetectado: true, metodo: "camara", cuadrosValidos: R.scores.length,
+            confianzaMedia: Math.round(R.scores.reduce((x, y) => x + y, 0) / R.scores.length),
+            movimiento: true, brillo: Math.round(R.bright), nitidez: Math.round(R.sharp), detector: "pico.js (en el dispositivo)",
+          });
+          return;
+        }
+        if (Date.now() - R.start > 45000) {
+          R.active = false; setPhase("fallo");
+          setMsg("No pudimos validar tu rostro. " + CHECK_MSG[R.last === "ok" ? "sin-rostro" : R.last]);
+          return;
+        }
+      }
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  };
+
+  // Alternativa sin cámara: analizar una selfie
+  const fromPhoto = async (file: File) => {
+    setDetectorErr("");
+    try {
+      const classify = await loadDetector();
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+      const a = createAnalyzer(classify)(img, img.naturalWidth, img.naturalHeight);
+      URL.revokeObjectURL(url);
+      const c = evaluate(a);
+      if (c === "ok" || c === "descentrado") {
+        setPhase("hecho"); setProgress(100); setMsg("¡Listo! Detectamos un rostro en la foto.");
+        onDone({ rostroDetectado: true, metodo: "foto", cuadrosValidos: 1, confianzaMedia: Math.round(a.faces[0].score), movimiento: false,
+          brillo: Math.round(a.brightness), nitidez: Math.round(a.sharpness), detector: "pico.js (en el dispositivo)" });
+      } else { setPhase("fallo"); setMsg("La foto no sirve: " + CHECK_MSG[c]); }
+    } catch { setPhase("fallo"); setMsg("No pudimos leer la imagen. Intenta con otra foto."); }
+  };
+
+  const done = phase === "hecho" && !!result;
   return (
     <div className="animate-fade-up mt-7 text-center">
-      <h1 className="text-[28px] font-extrabold tracking-tight">Validación facial</h1>
-      <p className="text-ink-soft">Ubica tu rostro dentro del marco y mantente quieto.</p>
-      <div className="relative mx-auto mt-6 aspect-[3/4] w-full max-w-[280px] overflow-hidden rounded-[36px] bg-gradient-to-br from-[#e5e9ff] to-[#efe8ff]">
-        <video ref={video} autoPlay playsInline muted className={cx("absolute inset-0 h-full w-full -scale-x-100 object-cover", camera !== "on" && "hidden")} />
-        {camera !== "on" && <LuScanFace className="absolute left-1/2 top-1/2 h-32 w-32 -translate-x-1/2 -translate-y-1/2 text-brand-blue/70" strokeWidth={1} />}
-        {/* esquinas del marco */}
-        {["left-4 top-4 border-l-4 border-t-4 rounded-tl-2xl", "right-4 top-4 border-r-4 border-t-4 rounded-tr-2xl", "left-4 bottom-4 border-l-4 border-b-4 rounded-bl-2xl", "right-4 bottom-4 border-r-4 border-b-4 rounded-br-2xl"].map((c) => (
-          <span key={c} className={cx("absolute h-12 w-12", ok ? "border-ok" : "border-brand-blue", c)} />
-        ))}
-        {scanning && <span className="animate-scan absolute inset-x-6 h-1 rounded-full bg-gradient-to-r from-transparent via-brand-blue to-transparent shadow-[0_0_16px_4px_rgba(31,107,255,.5)]" />}
-        {ok && <div className="absolute inset-0 flex items-center justify-center bg-ok/15"><LuCircleCheck className="h-20 w-20 rounded-full bg-white text-ok" /></div>}
+      <h1 className="text-[26px] font-extrabold tracking-tight">Validación facial</h1>
+      <p className="text-sm text-ink-soft">Ubica tu rostro dentro del marco, con buena luz y sin gafas oscuras.</p>
+      <div className="relative mx-auto mt-5 aspect-[3/4] w-full max-w-[260px] overflow-hidden rounded-[28px] bg-[#e8ebf7]">
+        <video ref={video} autoPlay playsInline muted className={cx("absolute inset-0 h-full w-full -scale-x-100 object-cover", camera !== "activa" && "hidden")} />
+        <canvas ref={overlay} className="absolute inset-0 h-full w-full" />
+        {camera !== "activa" && <LuScanFace className="absolute left-1/2 top-1/2 h-28 w-28 -translate-x-1/2 -translate-y-1/2 text-brand-blue/60" strokeWidth={1} />}
+        {done && <div className="absolute inset-0 flex items-center justify-center bg-ok/15"><LuCircleCheck className="h-16 w-16 rounded-full bg-white text-ok" /></div>}
+        <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/40"><div className="h-full bg-ok transition-all" style={{ width: progress + "%" }} /></div>
       </div>
-      <p className="mt-4 min-h-6 text-sm font-semibold text-ink-soft">
-        {ok ? "¡Identidad verificada correctamente!" : scanning ? "Analizando rasgos faciales…" : camera === "off" ? "Cámara no disponible: se usará una verificación simulada." : camera === "on" ? "Cámara activa" : "Solicitando acceso a la cámara…"}
+
+      <p role="status" aria-live="polite" data-testid="face-msg" className={cx("mx-auto mt-4 min-h-10 max-w-xs text-sm font-semibold", phase === "fallo" ? "text-bad" : done ? "text-ok" : "text-ink")}>
+        {detectorErr || msg || (camera === "pendiente" ? "Solicitando acceso a la cámara…" : camera === "activa" ? "Cámara lista." :
+          camera === "denegada" ? "No diste permiso para usar la cámara. Actívalo en el navegador o valida con una selfie." : "No encontramos una cámara disponible. Puedes validar con una selfie.")}
       </p>
-      {!ok ? (
-        <Button className="mt-4 w-full" icon={LuCamera} onClick={onStart} disabled={scanning}>{scanning ? "Verificando…" : "Escanear rostro"}</Button>
-      ) : (
-        <Button variant="dark" className="mt-4 w-full py-4" disabled={busy} onClick={onContinue}>{busy ? "Guardando tu cuenta…" : "Registrarme en Conecta+PRO"}</Button>
+
+      {!done && camera === "activa" && (phase === "listo" || phase === "fallo") && (
+        <Button className="mt-3 w-full" icon={LuCamera} onClick={start}>{phase === "fallo" ? "Intentar de nuevo" : "Iniciar validación"}</Button>
       )}
-      <button onClick={onBack} className="mt-4 text-sm font-semibold text-ink-soft hover:text-ink">Volver a mis datos</button>
+      {!done && (camera === "denegada" || camera === "no-disponible" || phase === "fallo") && (
+        <>
+          <Button variant="outline" className="mt-3 w-full" onClick={() => fileRef.current?.click()}>Validar con una selfie</Button>
+          <input ref={fileRef} type="file" accept="image/*" capture="user" hidden data-testid="selfie" onChange={(e) => { const f = e.target.files?.[0]; if (f) fromPhoto(f); e.target.value = ""; }} />
+        </>
+      )}
+      {done && <Button variant="dark" className="mt-3 w-full py-4" disabled={busy} onClick={() => onDone(result!)}>{busy ? "Guardando tu cuenta…" : "Registrarme en Conecta+PRO"}</Button>}
+
+      <p className="mx-auto mt-4 max-w-sm text-left text-xs leading-relaxed text-ink-soft">
+        La imagen se analiza solo en tu dispositivo y <b>no se guarda ni se envía</b>; solo registramos que se detectó un rostro.
+        Esta validación comprueba que hay una persona frente a la cámara, pero <b>no reconoce tu identidad</b> ni la compara con tu documento.
+      </p>
+      <button onClick={onBack} className="mt-3 text-sm font-semibold text-ink-soft hover:text-ink">Volver a mis datos</button>
     </div>
   );
 }

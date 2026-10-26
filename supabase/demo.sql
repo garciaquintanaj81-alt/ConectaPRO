@@ -11,10 +11,11 @@ declare m municipios;
 begin
   select * into m from municipios where codigo = p_muni;
   insert into solicitudes (id, cliente_id, titulo, descripcion, servicio_id, departamento, municipio, lat, lng, metodo_pago,
-                           estado, proveedor_id, foto, creado, finalizado)
+                           estado, proveedor_id, foto, creado, finalizado, direccion)
   values (p_id, p_cliente, p_titulo, p_desc, p_servicio, m.departamento, p_muni,
           m.lat + p_norte / 110.574, m.lng + p_este / (111.32 * cos(radians(m.lat))),
-          p_pago, p_estado, p_proveedor, coalesce(p_foto, (select foto from servicios where id = p_servicio)), p_creado, p_final);
+          p_pago, p_estado, p_proveedor, coalesce(p_foto, (select foto from servicios where id = p_servicio)), p_creado, p_final,
+          (array['Barrio Centro', 'Barrio San Antonio', 'Barrio La Pradera', 'Barrio El Porvenir', 'Barrio Los Alpes'])[1 + abs(hashtext(p_id::text)) % 5]);
   if p_estado = 'buscando' then
     insert into solicitud_notificados (solicitud_id, proveedor_id, distancia_km)
     select p_id, x.proveedor_id, round(x.distancia::numeric, 2)
@@ -111,6 +112,13 @@ begin
   -- Otras ciudades
   perform cp_demo_sol('c0000000-0000-4000-8000-000000000031', camila, 'Aire no enfría', 'El aire acondicionado no enfría, posible falta de gas.', 'aire', '68001', 0.2, 0.3, 'tarjeta', now() - interval '30 minutes', 'buscando');
   perform cp_demo_sol('c0000000-0000-4000-8000-000000000032', felipe, 'Portátil lento', 'Mi portátil está muy lento, necesito formateo y limpieza.', 'computadores', '11001', -1.0, 2.0, 'transferencia', now() - interval '50 minutes', 'buscando');
+
+  -- Sectores nuevos
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000041', oscar, 'Refuerzo de matemáticas', 'Necesito clases de refuerzo de matemáticas para mi hijo de 9.º grado.', 'refuerzo_escolar', '54001', 1.0, -0.4, 'nequi', now() - interval '35 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000042', valeria, 'Torta de cumpleaños', 'Torta para 20 personas para el sábado, sabor chocolate.', 'reposteria', '54001', 0.4, 0.5, 'efectivo', now() - interval '1 hour', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000043', nataliap, 'Declaración de renta', 'Necesito ayuda para presentar la declaración de renta.', 'contabilidad', '54874', 0.1, 0.2, 'transferencia', now() - interval '2 hours', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000044', santiago, 'Asesoría para cultivo de aguacate', 'Tengo una finca pequeña y quiero asesoría para fertilizar el cultivo de aguacate.', 'asistencia_agro', '05615', 2.0, 2.5, 'transferencia', now() - interval '3 hours', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000045', pedro, 'Clases de inglés', 'Clases de inglés conversacional dos veces por semana.', 'idiomas', '05615', 3.1, 2.4, 'nequi', now() - interval '4 hours', 'buscando');
 
   -- Trabajo en curso de Carlos con María
   perform cp_demo_sol('c0000000-0000-4000-8000-000000000017', maria, 'Revisión de tubería del patio', 'Hay humedad en la pared del patio, posible tubería rota.', 'plomeria', '05615', 1.6, 1.8, 'efectivo', now() - interval '1 day', 'en_curso', v_carlos);

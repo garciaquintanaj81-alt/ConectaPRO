@@ -47,6 +47,8 @@ export interface Request {
   photo?: string;
   punctualityPenalty?: boolean;
   trace?: Trace;
+  gps?: boolean;
+  gpsPrecision?: number | null;
 }
 
 export interface Message { id: string; from: "me" | "peer" | "system"; text?: string; image?: string; at: number }
@@ -191,7 +193,7 @@ function useStoreValue() {
       await loginDemoInternal(email);
       await refresh();
     },
-    async register(d: { email: string; password: string; name: string; document: string; phone: string; departamento: string; municipio: string }) {
+    async register(d: { email: string; password: string; name: string; document: string; phone: string; departamento: string; municipio: string; verification: unknown }) {
       try { await api.signUp(d.email, d.password, { nombre: d.name }); }
       catch (e: any) {
         // Si el acceso ya existía (p. ej. un intento anterior incompleto), se intenta ingresar con esa contraseña
@@ -199,7 +201,7 @@ function useStoreValue() {
         await api.signIn(d.email, d.password).catch(() => { throw e; });
       }
       try {
-        await api.rpc("api_completar_registro", { p_nombre: d.name, p_documento: d.document, p_celular: d.phone, p_departamento: d.departamento, p_municipio: d.municipio });
+        await api.rpc("api_completar_registro", { p_nombre: d.name, p_documento: d.document, p_celular: d.phone, p_departamento: d.departamento, p_municipio: d.municipio, p_verificacion: d.verification });
       } catch (e) {
         await api.signOut();
         throw e;
@@ -219,10 +221,11 @@ function useStoreValue() {
     providerNoShow: (requestId: string) => run(() => api.rpc("api_no_asistir", { p_solicitud: requestId })),
 
     // ---------- Cliente ----------
-    publishRequest: (i: { desc: string; service: ServiceId; departamento: string; municipio: string; lat?: number | null; lng?: number | null; direccion: string; payment: PaymentMethod; wantsProposals: boolean }) =>
-      run(() => api.rpc<{ id: string; notificados: number; trace: Trace }>("api_publicar", {
+    publishRequest: (i: { desc: string; service: ServiceId; departamento: string; municipio: string; lat?: number | null; lng?: number | null; precision?: number | null; direccion: string; payment: PaymentMethod; wantsProposals: boolean }) =>
+      run(() => api.rpc<{ id: string; notificados: number; trace: Trace; gps: boolean }>("api_publicar", {
         p_descripcion: i.desc, p_servicio: i.service, p_departamento: i.departamento, p_municipio: i.municipio,
         p_lat: i.lat ?? null, p_lng: i.lng ?? null, p_direccion: i.direccion, p_pago: i.payment, p_propuestas: i.wantsProposals,
+        p_precision: i.precision ?? null,
       })),
     editRequest: (id: string, desc: string, payment: PaymentMethod, direccion?: string) => run(() => api.rpc("api_editar_solicitud", { p_id: id, p_descripcion: desc, p_pago: payment, p_direccion: direccion ?? null })),
     deleteRequest: (id: string) => run(() => api.rpc("api_eliminar_solicitud", { p_id: id })),

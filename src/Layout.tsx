@@ -79,7 +79,7 @@ function BottomNav() {
 function Sidebar() {
   const path = useRoute();
   const items = useNav();
-  const { mode, setMode, account, myProvider, chats, points, toast } = useStore();
+  const { mode, setMode, myProvider, chats, toast } = useStore();
   const unread = chats.reduce((s, c) => s + c.unread, 0);
   const extra: NavItem[] = mode === "cliente"
     ? [
@@ -97,50 +97,41 @@ function Sidebar() {
     navigate("/inicio");
   };
 
+  const publish = all.find((it) => it.icon === LuPlus)!;
+  const links = all.filter((it) => it.icon !== LuPlus);
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[264px] flex-col border-r border-line bg-white/80 px-5 py-6 backdrop-blur lg:flex">
-      <Link to="/inicio"><Logo size="sm" /></Link>
-      <nav className="mt-8 flex-1 space-y-1 overflow-y-auto">
-        {all.map((it) => {
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[248px] flex-col border-r border-line bg-white px-4 py-6 lg:flex">
+      <Link to="/inicio" className="px-2"><Logo size="sm" /></Link>
+      <Link to={publish.to} className="mt-7 flex items-center justify-center gap-2 rounded-xl bg-brand-gradient px-4 py-3 text-[15px] font-bold text-white shadow-brand hover:brightness-110">
+        <LuPlus className="h-5 w-5" /> {mode === "cliente" ? "Publicar necesidad" : "Mi servicio"}
+      </Link>
+      <nav className="mt-6 flex-1 space-y-0.5 overflow-y-auto">
+        {links.map((it) => {
           const active = isActive(path, it);
-          const isPublish = it.icon === LuPlus;
           return (
             <Link
               key={it.to}
               to={it.to}
               className={cx(
-                "flex items-center gap-3 rounded-2xl px-4 py-3 text-[15px] font-semibold transition",
-                isPublish ? "my-2 bg-brand-gradient text-white shadow-brand hover:brightness-110"
-                  : active ? "bg-brand-50 text-brand" : "text-ink-soft hover:bg-surface hover:text-ink"
+                "flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14.5px] font-semibold transition",
+                active ? "bg-brand-50 text-brand" : "text-ink-soft hover:bg-surface hover:text-ink"
               )}
             >
-              <it.icon className="h-5 w-5" />
-              {isPublish ? (mode === "cliente" ? "Publicar solicitud" : "Mi servicio") : it.label}
+              <it.icon className="h-[18px] w-[18px]" />
+              {it.label}
               {it.to === "/mensajes" && unread > 0 && <span className="ml-auto rounded-full bg-bad px-2 text-xs font-bold text-white">{unread}</span>}
             </Link>
           );
         })}
       </nav>
 
-      <div className="mt-4 space-y-3">
-        <Link to="/perfil/beneficios" className="flex items-center gap-3 rounded-2xl bg-[#fff6e5] px-4 py-3 text-sm font-semibold text-[#9a5b00]">
-          <LuGift className="h-5 w-5" /> {points} puntos ConectaPRO
-        </Link>
-        <div className="rounded-3xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-ink-soft">Rol activo</div>
-          <div className="mt-1 flex items-center gap-2 text-[15px] font-bold">
-            {mode === "cliente" ? "Cliente" : "Proveedor"}
-            <span className="h-2 w-2 rounded-full bg-ok" />
-          </div>
-          <button onClick={switchMode} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-white px-3 py-2.5 text-sm font-bold text-brand ring-1 ring-line hover:ring-brand/40">
-            <LuArrowLeftRight className="h-4 w-4" /> Cambiar a {mode === "cliente" ? "proveedor" : "cliente"}
-          </button>
+      <button onClick={switchMode} className="mt-4 flex items-center gap-3 rounded-xl border border-line px-3 py-2.5 text-left hover:border-brand/40">
+        <LuArrowLeftRight className="h-[18px] w-[18px] text-brand" />
+        <div className="leading-tight">
+          <div className="text-[13px] font-bold">Modo {mode === "cliente" ? "cliente" : "proveedor"}</div>
+          <div className="text-xs text-ink-soft">Cambiar a {mode === "cliente" ? "proveedor" : "cliente"}</div>
         </div>
-        <Link to="/perfil/ayuda" className="flex items-center gap-3 px-4 py-2 text-sm font-semibold text-ink-soft hover:text-ink">
-          <LuLifeBuoy className="h-5 w-5" /> Ayuda y soporte
-        </Link>
-        {account && <div className="px-4 text-[11px] text-ink-soft/80">Proyecto académico · UDES 2026</div>}
-      </div>
+      </button>
     </aside>
   );
 }
@@ -151,7 +142,7 @@ function TopBar() {
   const unread = notifications.filter((n) => !n.read).length;
   if (!account) return null;
   return (
-    <header className="sticky top-0 z-20 hidden items-center justify-between border-b border-line bg-surface/85 px-8 py-3.5 backdrop-blur lg:flex">
+    <header className="sticky top-0 z-20 hidden items-center justify-between border-b border-line bg-white/90 px-8 py-3 backdrop-blur lg:flex">
       <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold ring-1 ring-line">
         <LuMapPin className="h-4 w-4 text-brand-blue" />
         {mode === "proveedor" && myProvider ? `${myProvider.city} · cobertura ${myProvider.coverageKm} km` : account.city}
@@ -200,9 +191,8 @@ export function MobileTopBar() {
 export function AppShell({ children, hideNav, wide }: { children: ReactNode; hideNav?: boolean; wide?: boolean }) {
   return (
     <div className="relative min-h-screen">
-      <div className="blobs" />
       <Sidebar />
-      <div className="relative z-10 lg:pl-[264px]">
+      <div className="relative z-10 lg:pl-[248px]">
         <TopBar />
         <main className={cx("mx-auto w-full px-4 pt-5 sm:px-6 lg:px-8 lg:pb-12 lg:pt-8", wide ? "max-w-7xl" : "max-w-6xl", hideNav ? "pb-10" : "pb-32")}>
           {children}

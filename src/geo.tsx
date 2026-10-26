@@ -130,3 +130,40 @@ export function UbicacionSelect({
     </div>
   );
 }
+
+// =====================================================================
+//  Ubicación actual del dispositivo (GPS / red), con permiso del usuario.
+//  Es independiente del municipio administrativo: solo sirve para medir
+//  distancias reales y precisar el punto del servicio.
+// =====================================================================
+export type GeoStatus = "inactivo" | "pidiendo" | "ok" | "denegado" | "no-disponible" | "error";
+export interface GeoFix { lat: number; lng: number; accuracy: number; at: number }
+
+export function useGeolocation() {
+  const [status, setStatus] = useState<GeoStatus>("inactivo");
+  const [fix, setFix] = useState<GeoFix | null>(null);
+  const request = () =>
+    new Promise<GeoFix | null>((resolve) => {
+      if (!("geolocation" in navigator) || !window.isSecureContext) { setStatus("no-disponible"); return resolve(null); }
+      setStatus("pidiendo");
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const f = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy), at: Date.now() };
+          setFix(f); setStatus("ok"); resolve(f);
+        },
+        (err) => { setStatus(err.code === err.PERMISSION_DENIED ? "denegado" : "error"); resolve(null); },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+      );
+    });
+  const clear = () => { setFix(null); setStatus("inactivo"); };
+  return { status, fix, request, clear };
+}
+
+export const GEO_MSG: Record<GeoStatus, string> = {
+  inactivo: "",
+  pidiendo: "Solicitando permiso de ubicación…",
+  ok: "",
+  denegado: "No diste permiso de ubicación. Puedes activarlo en la configuración del navegador; mientras tanto se usa el municipio que elegiste.",
+  "no-disponible": "Este navegador no permite obtener la ubicación (requiere conexión segura https).",
+  error: "No pudimos obtener tu ubicación. Revisa que el GPS esté encendido e inténtalo de nuevo.",
+};

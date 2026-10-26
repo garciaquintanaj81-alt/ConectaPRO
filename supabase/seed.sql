@@ -1148,34 +1148,92 @@ insert into municipios (codigo, departamento, nombre, lat, lng) values
 ('99773','99','Cumaribo',4.4444444,-69.8002778)
 on conflict (codigo) do update set departamento = excluded.departamento, nombre = excluded.nombre, lat = excluded.lat, lng = excluded.lng;
 
-insert into categorias (id, nombre, orden) values
-('hogar','Hogar',0),
-('tecnologia','Tecnología',1),
-('construccion','Construcción',2),
-('belleza','Belleza',3),
-('transporte','Transporte',4),
-('salud','Salud',5),
-('mascotas','Mascotas',6),
-('mas','Más',7)
-on conflict (id) do update set nombre = excluded.nombre, orden = excluded.orden;
+insert into categorias (id, nombre, corto, descripcion, orden) values
+('hogar','Hogar y reparaciones','Hogar','Plomería, electricidad, aseo, cerrajería y más',0),
+('construccion','Construcción y remodelación','Construcción','Pintura, obra, carpintería y soldadura',1),
+('tecnologia','Tecnología','Tecnología','Computadores, celulares, redes y software',2),
+('belleza','Belleza y cuidado personal','Belleza','Peluquería, barbería, uñas y maquillaje',3),
+('transporte','Transporte y vehículos','Transporte','Mudanzas, mensajería y mecánica',4),
+('salud','Salud y bienestar','Salud','Enfermería, fisioterapia y psicología',5),
+('mascotas','Mascotas','Mascotas','Paseo, veterinaria y peluquería canina',6),
+('educacion','Educación y clases','Educación','Refuerzo escolar, idiomas y música',7),
+('comercio','Comercio y ventas','Comercio','Domicilios, comida, repostería y ventas',8),
+('agricultura','Agro y campo','Agro','Jornaleros, asistencia técnica y maquinaria',9),
+('profesionales','Servicios profesionales','Profesionales','Contabilidad, asesoría legal y diseño',10),
+('eventos','Eventos','Eventos','Decoración, fotografía, música y comida',11),
+('mas','Otros servicios','Otros','Cuidado de personas, mandados y más',12)
+on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, descripcion = excluded.descripcion, orden = excluded.orden;
 
-insert into servicios (id, nombre, corto, categoria, foto, orden) values
-('plomeria','Plomería','Plomería','hogar','img/plomeria.jpg',0),
-('electricidad','Electricidad','Electricidad','hogar','img/electricidad.jpg',1),
-('aire','Aire acondicionado','Aire acond.','hogar','img/aire.jpg',2),
-('pintura','Pintura','Pintura','construccion','img/pintura.jpg',3),
-('limpieza','Limpieza del hogar','Limpieza','hogar',null,4),
-('albanileria','Albañilería','Albañilería','construccion',null,5),
-('computadores','Reparación de computadores','Computadores','tecnologia',null,6),
-('celulares','Reparación de celulares','Celulares','tecnologia',null,7),
-('peluqueria','Corte de cabello','Peluquería','belleza',null,8),
-('manicure','Manicure y pedicure','Manicure','belleza',null,9),
-('mudanzas','Mudanzas y fletes','Mudanzas','transporte',null,10),
-('conductor','Conductor elegido','Conductor','transporte',null,11),
-('enfermeria','Cuidado y enfermería','Enfermería','salud',null,12),
-('paseo','Paseo de perros','Paseo perros','mascotas',null,13),
-('veterinaria','Veterinaria a domicilio','Veterinaria','mascotas',null,14)
-on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, categoria = excluded.categoria, foto = excluded.foto, orden = excluded.orden;
+insert into servicios (id, nombre, corto, categoria, foto, palabras, orden) values
+('plomeria','Plomería','Plomería','hogar','img/plomeria.jpg','fuga tuberia agua grifo griferia lavaplatos sanitario baño desague cañeria tanque',0),
+('electricidad','Electricidad','Electricidad','hogar','img/electricidad.jpg','luz cables lampara toma enchufe breaker corto instalacion electrica',1),
+('aire','Aire acondicionado','Aire acond.','hogar','img/aire.jpg','aire acondicionado nevera refrigeracion mantenimiento gas minisplit',2),
+('limpieza','Limpieza del hogar','Limpieza','hogar',null,'aseo limpieza casa apartamento oficina planchado',3),
+('cerrajeria','Cerrajería','Cerrajería','hogar',null,'llave cerradura chapa puerta abrir candado',4),
+('electrodomesticos','Reparación de electrodomésticos','Electrodomésticos','hogar',null,'lavadora nevera estufa horno microondas licuadora',5),
+('jardineria','Jardinería','Jardinería','hogar',null,'jardin pasto poda plantas cesped',6),
+('fumigacion','Fumigación de plagas','Fumigación','hogar',null,'plagas cucarachas zancudos ratas termitas',7),
+('pintura','Pintura','Pintura','construccion','img/pintura.jpg','pintar pared estuco fachada habitacion',8),
+('albanileria','Albañilería y obra','Albañilería','construccion',null,'obra muro pañete enchape baldosa piso remodelacion',9),
+('carpinteria','Carpintería','Carpintería','construccion',null,'madera muebles closet cocina puerta',10),
+('soldadura','Soldadura y ornamentación','Soldadura','construccion',null,'rejas metal soldar puertas ornamentacion',11),
+('drywall','Drywall y cielorrasos','Drywall','construccion',null,'drywall cielo raso division superboard',12),
+('impermeabilizacion','Techos e impermeabilización','Techos','construccion',null,'techo goteras teja impermeabilizar',13),
+('computadores','Reparación de computadores','Computadores','tecnologia',null,'computador portatil pc formateo virus lento',14),
+('celulares','Reparación de celulares','Celulares','tecnologia',null,'celular pantalla bateria telefono',15),
+('redes','Internet y redes WiFi','Redes WiFi','tecnologia',null,'wifi internet router red cableado',16),
+('camaras','Cámaras de seguridad','Cámaras','tecnologia',null,'camaras seguridad cctv alarmas',17),
+('desarrollo_web','Páginas web y software','Software','tecnologia',null,'pagina web aplicacion software tienda virtual',18),
+('peluqueria','Corte de cabello','Peluquería','belleza',null,'corte cabello pelo tinte cepillado peinado',19),
+('barberia','Barbería','Barbería','belleza',null,'barba corte hombre afeitado',20),
+('manicure','Manicure y pedicure','Manicure','belleza',null,'uñas manos pies esmalte acrilicas',21),
+('maquillaje','Maquillaje','Maquillaje','belleza',null,'maquillaje novia evento',22),
+('depilacion','Depilación','Depilación','belleza',null,'cera depilar cejas',23),
+('mudanzas','Mudanzas y fletes','Mudanzas','transporte',null,'trasteo mudanza flete acarreo camion',24),
+('conductor','Conductor elegido','Conductor','transporte',null,'conductor chofer manejar',25),
+('mensajeria','Mensajería','Mensajería','transporte',null,'mensajero paquete envio entrega',26),
+('mecanica','Mecánica automotriz','Mecánica','transporte',null,'carro moto motor frenos taller mecanico',27),
+('lavado_autos','Lavado de vehículos','Lavado autos','transporte',null,'lavado carro moto',28),
+('enfermeria','Cuidado y enfermería','Enfermería','salud',null,'enfermera inyeccion curacion',29),
+('fisioterapia','Fisioterapia','Fisioterapia','salud',null,'terapia dolor rehabilitacion',30),
+('psicologia','Psicología','Psicología','salud',null,'psicologo terapia ansiedad',31),
+('nutricion','Nutrición','Nutrición','salud',null,'dieta nutricionista alimentacion',32),
+('entrenador','Entrenador personal','Entrenador','salud',null,'ejercicio gimnasio entrenamiento',33),
+('paseo','Paseo de perros','Paseo perros','mascotas',null,'pasear perro mascota',34),
+('veterinaria','Veterinaria a domicilio','Veterinaria','mascotas',null,'veterinario vacuna perro gato',35),
+('peluqueria_canina','Peluquería canina','Peluquería canina','mascotas',null,'baño perro grooming',36),
+('cuidado_mascotas','Cuidado de mascotas','Guardería','mascotas',null,'guarderia cuidar mascota hotel',37),
+('adiestramiento','Adiestramiento canino','Adiestramiento','mascotas',null,'entrenar perro obediencia',38),
+('refuerzo_escolar','Refuerzo escolar y tareas','Refuerzo escolar','educacion',null,'tareas matematicas colegio profesor clases',39),
+('idiomas','Clases de idiomas','Idiomas','educacion',null,'ingles frances idioma profesor',40),
+('musica','Clases de música','Música','educacion',null,'guitarra piano canto musica',41),
+('preicfes','Preparación ICFES y preuniversitario','Pre ICFES','educacion',null,'icfes saber 11 examen universidad',42),
+('clases_programacion','Clases de programación','Programación','educacion',null,'programar codigo python excel informatica',43),
+('domicilios','Domicilios y entregas','Domicilios','comercio',null,'domicilio entrega pedido',44),
+('comida_casera','Comida casera','Comida casera','comercio',null,'almuerzo comida corrientazo',45),
+('reposteria','Repostería y tortas','Repostería','comercio',null,'torta ponque postre cumpleaños',46),
+('ventas_catalogo','Ventas por catálogo','Catálogo','comercio',null,'catalogo productos ropa cosmeticos',47),
+('marketing_redes','Publicidad y redes sociales','Marketing','comercio',null,'redes sociales instagram publicidad negocio',48),
+('jornaleros','Jornaleros y mano de obra agrícola','Jornaleros','agricultura',null,'jornal cosecha finca recoleccion',49),
+('fumigacion_cultivos','Fumigación de cultivos','Fumigación agro','agricultura',null,'cultivo plaga fumigar finca',50),
+('asistencia_agro','Asistencia técnica agropecuaria','Asistencia agro','agricultura',null,'agronomo suelo cultivo asesoria finca',51),
+('maquinaria_agricola','Maquinaria agrícola','Maquinaria','agricultura',null,'tractor arado guadaña maquinaria',52),
+('veterinaria_rural','Veterinaria de ganado','Ganado','agricultura',null,'ganado vacas bovinos cerdos',53),
+('contabilidad','Contabilidad e impuestos','Contabilidad','profesionales',null,'contador impuestos renta dian factura',54),
+('asesoria_legal','Asesoría legal','Abogados','profesionales',null,'abogado contrato demanda derecho',55),
+('diseno_grafico','Diseño gráfico','Diseño gráfico','profesionales',null,'logo diseño publicidad marca',56),
+('traduccion','Traducción','Traducción','profesionales',null,'traducir documento ingles',57),
+('arquitectura','Arquitectura y planos','Arquitectura','profesionales',null,'planos arquitecto diseño casa licencia',58),
+('decoracion_eventos','Decoración de eventos','Decoración','eventos',null,'decoracion fiesta globos cumpleaños boda',59),
+('fotografia_video','Fotografía y video','Fotografía','eventos',null,'fotografo fotos video boda grado',60),
+('musica_dj','Música y DJ','DJ','eventos',null,'dj sonido musica fiesta',61),
+('catering','Catering y meseros','Catering','eventos',null,'comida evento meseros banquete',62),
+('animacion_infantil','Animación infantil','Animación','eventos',null,'recreacion niños payaso fiesta infantil',63),
+('cuidado_ninos','Cuidado de niños','Niñera','mas',null,'niñera cuidar niños bebe',64),
+('adulto_mayor','Acompañamiento adulto mayor','Adulto mayor','mas',null,'acompañante abuelo cuidado',65),
+('mandados','Mandados y diligencias','Mandados','mas',null,'diligencia mandado tramite fila',66),
+('otro','Otro servicio','Otro','mas',null,'otro',67)
+on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, categoria = excluded.categoria, foto = excluded.foto, palabras = excluded.palabras, orden = excluded.orden;
 
 insert into aliados (id, marca, oferta, costo, color) values
 (1,'Homecenter','10% en herramientas y materiales',300,'bg-[#fff1e0] text-[#c2410c]'),
@@ -1239,7 +1297,35 @@ insert into perfiles (id, nombre, correo, foto, celular, documento, departamento
 ('a0000000-0000-4000-8000-000000000072','Óscar Beltrán','oscar.beltran@ejemplo.co',null,'3170088848','1000000072','11','11001',100,4.8,3,true,true),
 ('a0000000-0000-4000-8000-000000000073','Yuliana Mosquera','yuliana.mosquera@ejemplo.co',null,'3170090082','1000000073','76','76001',100,4.8,3,true,true),
 ('a0000000-0000-4000-8000-000000000074','Rafael Barrios','rafael.barrios@ejemplo.co',null,'3170091316','1000000074','08','08001',100,4.8,3,true,true),
-('a0000000-0000-4000-8000-000000000075','Kelly Julio','kelly.julio@ejemplo.co',null,'3170092550','1000000075','13','13001',100,4.8,3,true,true)
+('a0000000-0000-4000-8000-000000000075','Kelly Julio','kelly.julio@ejemplo.co',null,'3170092550','1000000075','13','13001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000080','Andrea Suárez','andrea.suarez@ejemplo.co',null,'3170098720','1000000080','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000081','Mateo Villamizar','mateo.villamizar@ejemplo.co',null,'3170099954','1000000081','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000082','Lina Restrepo','lina.restrepo@ejemplo.co',null,'3170101188','1000000082','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000083','Óscar Duarte','oscar.duarte@ejemplo.co',null,'3170102422','1000000083','68','68001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000084','Rosa Mantilla','rosa.mantilla@ejemplo.co',null,'3170103656','1000000084','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000085','Johan Ríos','johan.rios@ejemplo.co',null,'3170104890','1000000085','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000086','Paola Arenas','paola.arenas@ejemplo.co',null,'3170106124','1000000086','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000087','Ramiro Lizcano','ramiro.lizcano@ejemplo.co',null,'3170107358','1000000087','54','54498',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000088','Felipe Quintero','felipe.quintero@ejemplo.co',null,'3170108592','1000000088','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000089','Hernando Patiño','hernando.patino@ejemplo.co',null,'3170109826','1000000089','05','05440',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000090','Diana Peña','diana.pena@ejemplo.co',null,'3170111060','1000000090','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000091','Jorge Mendoza','jorge.mendoza@ejemplo.co',null,'3170112294','1000000091','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000092','Camilo Ospina','camilo.ospina@ejemplo.co',null,'3170113528','1000000092','05','05001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000093','Sandra Rincón','sandra.rincon@ejemplo.co',null,'3170114762','1000000093','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000094','Kevin Lozano','kevin.lozano@ejemplo.co',null,'3170115996','1000000094','68','68001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000095','Germán Ruiz','german.ruiz@ejemplo.co',null,'3170117230','1000000095','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000096','Wilson Ortega','wilson.ortega@ejemplo.co',null,'3170118464','1000000096','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000097','Natalia Celis','natalia.celis@ejemplo.co',null,'3170119698','1000000097','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000098','Marcela Torres','marcela.torres@ejemplo.co',null,'3170120932','1000000098','11','11001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000099','Yeison Gómez','yeison.gomez@ejemplo.co',null,'3170122166','1000000099','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000100','Luis Pabón','luis.pabon@ejemplo.co',null,'3170123400','1000000100','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000101','Juliana Mora','juliana.mora@ejemplo.co',null,'3170124634','1000000101','05','05001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000102','Edgar Martínez','edgar.martinez@ejemplo.co',null,'3170125868','1000000102','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000103','Ramón Peña','ramon.pena@ejemplo.co',null,'3170127102','1000000103','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000104','Gloria Rojas','gloria.rojas@ejemplo.co',null,'3170128336','1000000104','05','05615',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000105','Tatiana Leal','tatiana.leal@ejemplo.co',null,'3170129570','1000000105','54','54001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000106','Sebastián Prada','sebastian.prada@ejemplo.co',null,'3170130804','1000000106','68','68001',100,4.8,3,true,true),
+('a0000000-0000-4000-8000-000000000107','Néstor Galvis','nestor.galvis@ejemplo.co',null,'3170132038','1000000107','54','54001',100,4.8,3,true,true)
 on conflict (id) do update set nombre = excluded.nombre, foto = excluded.foto, departamento = excluded.departamento, municipio = excluded.municipio;
 
 insert into proveedores (id, perfil_id, empresa, profesion, departamento, municipio, lat, lng, cobertura_km, dias, hora_desde, hora_hasta, precio_min, precio_max, descripcion, ofrece, telefono, calificacion, num_resenas, completados, verificado, calificacion_ini, resenas_ini, completados_ini) values
@@ -1282,7 +1368,35 @@ insert into proveedores (id, perfil_id, empresa, profesion, departamento, munici
 ('b0000000-0000-4000-8000-000000000072','a0000000-0000-4000-8000-000000000072','Plomería Capital','Plomero','11','11001',4.600656,-74.059169,20,'{1,2,3,4,5,6}',7,18,50000,95000,'Plomero en el norte y centro de Bogotá.',array['Fugas','Calentadores','Destapes']::text[],'317 008 8848',4.5,16,30,true,4.5,16,30),
 ('b0000000-0000-4000-8000-000000000073','a0000000-0000-4000-8000-000000000073','Yuli Trenzas','Estilista','76','76001',3.44084,-76.5198,12,'{1,2,3,4,5,6}',9,19,25000,80000,'Trenzas, cortes y peinados en Cali.',array['Trenzas','Cortes','Peinados']::text[],'317 009 0082',4.9,44,98,true,4.9,44,98),
 ('b0000000-0000-4000-8000-000000000074','a0000000-0000-4000-8000-000000000074','Brisa Fría','Técnico en aire acondicionado','08','08001',10.965698,-74.792729,20,'{1,2,3,4,5,6}',7,19,70000,170000,'Aires acondicionados en Barranquilla.',array['Mantenimiento','Instalación']::text[],'317 009 1316',4.7,38,85,true,4.7,38,85),
-('b0000000-0000-4000-8000-000000000075','a0000000-0000-4000-8000-000000000075','Kelly Nails','Manicurista','13','13001',10.400627,-75.513531,10,'{1,2,3,4,5,6}',9,19,25000,60000,'Manicure y pedicure en Cartagena.',array['Manicure','Pedicure']::text[],'317 009 2550',4.8,26,61,true,4.8,26,61)
+('b0000000-0000-4000-8000-000000000075','a0000000-0000-4000-8000-000000000075','Kelly Nails','Manicurista','13','13001',10.400627,-75.513531,10,'{1,2,3,4,5,6}',9,19,25000,60000,'Manicure y pedicure en Cartagena.',array['Manicure','Pedicure']::text[],'317 009 2550',4.8,26,61,true,4.8,26,61),
+('b0000000-0000-4000-8000-000000000080','a0000000-0000-4000-8000-000000000080','Clases con Andrea','Licenciada en matemáticas','54','54001',7.885761,-72.503265,15,'{1,2,3,4,5,6}',14,20,25000,45000,'Refuerzo escolar de matemáticas y física, y preparación para el ICFES.',array['Matemáticas','Física','Simulacros ICFES']::text[],'317 009 8720',4.9,37,120,true,4.9,37,120),
+('b0000000-0000-4000-8000-000000000081','a0000000-0000-4000-8000-000000000081','Música Viva','Profesor de guitarra','54','54001',7.904752,-72.515055,12,'{1,2,3,4,5,6}',9,19,30000,50000,'Clases de guitarra y piano para niños y adultos.',array['Guitarra','Piano','Teoría musical']::text[],'317 009 9954',4.8,21,64,true,4.8,21,64),
+('b0000000-0000-4000-8000-000000000082','a0000000-0000-4000-8000-000000000082','English Now','Docente de inglés','05','05615',6.168666,-75.368279,15,'{1,2,3,4,5}',7,20,35000,60000,'Clases de inglés conversacional y para el trabajo, presenciales o virtuales.',array['Inglés conversacional','Inglés para entrevistas']::text[],'317 010 1188',4.9,33,88,true,4.9,33,88),
+('b0000000-0000-4000-8000-000000000083','a0000000-0000-4000-8000-000000000083','Preicfes Santander','Docente','68','68001',7.134244,-73.124023,15,'{1,2,3,4,5,6}',8,18,30000,55000,'Preparación para el ICFES y exámenes de admisión.',array['Simulacros','Lectura crítica','Matemáticas']::text[],'317 010 2422',4.7,26,70,true,4.7,26,70),
+('b0000000-0000-4000-8000-000000000084','a0000000-0000-4000-8000-000000000084','Delicias de Rosa','Repostera','54','54001',7.897517,-72.497824,12,'{0,1,2,3,4,5,6}',7,19,15000,120000,'Tortas por encargo, postres y almuerzos caseros a domicilio.',array['Tortas de cumpleaños','Postres','Almuerzos']::text[],'317 010 3656',4.9,58,210,true,4.9,58,210),
+('b0000000-0000-4000-8000-000000000085','a0000000-0000-4000-8000-000000000085','Domicilios Express','Mensajero','54','54001',7.892091,-72.510521,15,'{0,1,2,3,4,5,6}',6,22,5000,20000,'Domicilios, mensajería y diligencias en moto por toda Cúcuta.',array['Domicilios','Pagos y diligencias','Envíos']::text[],'317 010 4890',4.6,44,380,true,4.6,44,380),
+('b0000000-0000-4000-8000-000000000086','a0000000-0000-4000-8000-000000000086','Paola Digital','Community manager','11','11001',4.620552,-74.07449,30,'{1,2,3,4,5}',8,18,150000,600000,'Manejo de redes sociales y publicidad para pequeños negocios.',array['Contenido para Instagram','Pauta digital','Logos']::text[],'317 010 6124',4.8,19,40,true,4.8,19,40),
+('b0000000-0000-4000-8000-000000000087','a0000000-0000-4000-8000-000000000087','Agroservicios del Norte','Contratista agrícola','54','54498',8.252713,-73.296369,40,'{1,2,3,4,5,6}',5,16,60000,400000,'Cuadrillas para cosecha y fumigación de cultivos en la provincia de Ocaña.',array['Cosecha de cebolla','Fumigación','Siembra']::text[],'317 010 7358',4.5,15,35,true,4.5,15,35),
+('b0000000-0000-4000-8000-000000000088','a0000000-0000-4000-8000-000000000088','AgroAsesor','Ingeniero agrónomo','05','05615',6.182231,-75.351112,40,'{1,2,3,4,5,6}',7,17,80000,250000,'Asesoría en cultivos, análisis de suelos y manejo de plagas en el Oriente antioqueño.',array['Análisis de suelos','Plan de fertilización','Control de plagas']::text[],'317 010 8592',4.8,22,48,true,4.8,22,48),
+('b0000000-0000-4000-8000-000000000089','a0000000-0000-4000-8000-000000000089','Maquinaria Patiño','Operador de maquinaria','05','05440',6.203617,-75.294578,35,'{1,2,3,4,5,6}',6,16,120000,500000,'Alquiler de tractor con operador para arado y rastrillado.',array['Arado','Rastrillado','Guadañadora']::text[],'317 010 9826',4.6,12,22,true,4.6,12,22),
+('b0000000-0000-4000-8000-000000000090','a0000000-0000-4000-8000-000000000090','Contable DP','Contadora pública','54','54001',7.899326,-72.505986,30,'{1,2,3,4,5}',8,18,80000,400000,'Declaración de renta, contabilidad para negocios y facturación electrónica.',array['Declaración de renta','Contabilidad mensual','Facturación electrónica']::text[],'317 011 1060',4.9,31,95,true,4.9,31,95),
+('b0000000-0000-4000-8000-000000000091','a0000000-0000-4000-8000-000000000091','Mendoza Abogados','Abogado','11','11001',4.613317,-74.087107,30,'{1,2,3,4,5}',8,18,100000,500000,'Asesoría en contratos, arrendamientos y derecho laboral.',array['Contratos','Arrendamientos','Laboral']::text[],'317 011 2294',4.7,18,52,true,4.7,18,52),
+('b0000000-0000-4000-8000-000000000092','a0000000-0000-4000-8000-000000000092','Ospina Foto','Fotógrafo','05','05001',6.286867,-75.5334,40,'{0,1,2,3,4,5,6}',8,22,250000,1500000,'Fotografía y video para bodas, grados y empresas.',array['Bodas','Grados','Fotografía de producto']::text[],'317 011 3528',4.9,40,130,true,4.9,40,130),
+('b0000000-0000-4000-8000-000000000093','a0000000-0000-4000-8000-000000000093','Eventos Mágicos','Decoradora de eventos','54','54001',7.905657,-72.499638,20,'{0,1,2,3,4,5,6}',8,20,150000,900000,'Decoración con globos y animación para fiestas infantiles.',array['Decoración con globos','Recreacionistas','Mesas temáticas']::text[],'317 011 4762',4.8,35,90,true,4.8,35,90),
+('b0000000-0000-4000-8000-000000000094','a0000000-0000-4000-8000-000000000094','DJ Kevin','DJ','68','68001',7.131531,-73.129455,30,'{0,1,2,3,4,5,6}',16,24,300000,1200000,'Sonido, luces y DJ para fiestas y eventos.',array['DJ','Sonido','Luces']::text[],'317 011 5996',4.7,27,60,true,4.7,27,60),
+('b0000000-0000-4000-8000-000000000095','a0000000-0000-4000-8000-000000000095','Carpintería Ruiz','Carpintero','05','05615',6.144248,-75.386349,20,'{1,2,3,4,5,6}',7,17,80000,900000,'Muebles a la medida, closets y cocinas en madera.',array['Closets','Cocinas integrales','Reparación de muebles']::text[],'317 011 7230',4.7,20,55,true,4.7,20,55),
+('b0000000-0000-4000-8000-000000000096','a0000000-0000-4000-8000-000000000096','Cerrajería 24 horas','Cerrajero','54','54001',7.902039,-72.513241,15,'{0,1,2,3,4,5,6}',0,24,30000,120000,'Apertura de puertas, cambio de guardas y cerraduras de seguridad.',array['Apertura de puertas','Cambio de guardas']::text[],'317 011 8464',4.6,39,140,true,4.6,39,140),
+('b0000000-0000-4000-8000-000000000097','a0000000-0000-4000-8000-000000000097','FisioCelis','Fisioterapeuta','54','54001',7.890283,-72.501452,15,'{1,2,3,4,5,6}',7,19,60000,100000,'Fisioterapia a domicilio para lesiones, posoperatorios y adultos mayores.',array['Rehabilitación','Terapia respiratoria']::text[],'317 011 9698',4.9,25,75,true,4.9,25,75),
+('b0000000-0000-4000-8000-000000000098','a0000000-0000-4000-8000-000000000098','Psicología en casa','Psicóloga','11','11001',4.596134,-74.078095,25,'{1,2,3,4,5}',8,20,80000,150000,'Atención psicológica para adultos y adolescentes, presencial o virtual.',array['Ansiedad','Terapia de pareja','Orientación vocacional']::text[],'317 012 0932',4.9,30,88,true,4.9,30,88),
+('b0000000-0000-4000-8000-000000000099','a0000000-0000-4000-8000-000000000099','Barbería El Parcero','Barbero','54','54001',7.897517,-72.509614,10,'{1,2,3,4,5,6}',9,21,15000,35000,'Cortes y barba a domicilio.',array['Corte clásico','Barba','Diseños']::text[],'317 012 2166',4.8,52,260,true,4.8,52,260),
+('b0000000-0000-4000-8000-000000000100','a0000000-0000-4000-8000-000000000100','Taller Pabón','Mecánico automotriz','54','54001',7.886665,-72.491476,15,'{1,2,3,4,5,6}',7,18,50000,400000,'Mecánica general a domicilio para carros y motos.',array['Frenos','Cambio de aceite','Diagnóstico']::text[],'317 012 3400',4.6,29,120,true,4.6,29,120),
+('b0000000-0000-4000-8000-000000000101','a0000000-0000-4000-8000-000000000101','Estudio JM','Diseñadora gráfica','05','05001',6.296815,-75.54063,50,'{1,2,3,4,5}',8,18,80000,500000,'Logos, identidad de marca y piezas para redes.',array['Logos','Piezas para redes','Tarjetas']::text[],'317 012 4634',4.8,23,66,true,4.8,23,66),
+('b0000000-0000-4000-8000-000000000102','a0000000-0000-4000-8000-000000000102','Jardines Verdes','Jardinero','05','05615',6.149674,-75.356533,15,'{1,2,3,4,5,6}',7,16,40000,150000,'Mantenimiento de jardines, poda y fumigación.',array['Poda','Corte de césped','Fumigación']::text[],'317 012 5868',4.7,18,60,true,4.7,18,60),
+('b0000000-0000-4000-8000-000000000103','a0000000-0000-4000-8000-000000000103','Técnico Ramón','Técnico en electrodomésticos','54','54001',7.902944,-72.5078,15,'{1,2,3,4,5,6}',8,18,40000,180000,'Reparación de lavadoras, neveras y estufas de todas las marcas.',array['Lavadoras','Neveras','Estufas']::text[],'317 012 7102',4.6,24,98,true,4.6,24,98),
+('b0000000-0000-4000-8000-000000000104','a0000000-0000-4000-8000-000000000104','Cuidado con amor','Niñera','05','05615',6.160526,-75.380928,10,'{0,1,2,3,4,5,6}',6,22,40000,90000,'Cuidado de niños y acompañamiento de adultos mayores.',array['Niñera por horas','Acompañamiento']::text[],'317 012 8336',4.9,16,45,true,4.9,16,45),
+('b0000000-0000-4000-8000-000000000105','a0000000-0000-4000-8000-000000000105','Mascotas Spa','Groomer','54','54001',7.888474,-72.516869,15,'{1,2,3,4,5,6}',8,18,30000,80000,'Baño y peluquería canina a domicilio.',array['Baño','Corte','Guardería']::text[],'317 012 9570',4.8,31,110,true,4.8,31,110),
+('b0000000-0000-4000-8000-000000000106','a0000000-0000-4000-8000-000000000106','Prada Dev','Desarrollador web','68','68001',7.127009,-73.120401,30,'{1,2,3,4,5}',8,19,200000,2500000,'Páginas web, tiendas virtuales e instalación de redes y cámaras.',array['Páginas web','Tiendas virtuales','Cámaras de seguridad']::text[],'317 013 0804',4.7,14,30,true,4.7,14,30),
+('b0000000-0000-4000-8000-000000000107','a0000000-0000-4000-8000-000000000107','Ornamentación Galvis','Soldador','54','54001',7.895709,-72.487848,20,'{1,2,3,4,5,6}',7,17,80000,800000,'Rejas, puertas metálicas y estructuras.',array['Rejas','Puertas','Estructuras']::text[],'317 013 2038',4.6,17,40,true,4.6,17,40)
 on conflict (id) do nothing;
 
 insert into proveedor_servicios (proveedor_id, servicio_id) values
@@ -1342,7 +1456,51 @@ insert into proveedor_servicios (proveedor_id, servicio_id) values
 ('b0000000-0000-4000-8000-000000000072','plomeria'),
 ('b0000000-0000-4000-8000-000000000073','peluqueria'),
 ('b0000000-0000-4000-8000-000000000074','aire'),
-('b0000000-0000-4000-8000-000000000075','manicure')
+('b0000000-0000-4000-8000-000000000075','manicure'),
+('b0000000-0000-4000-8000-000000000080','refuerzo_escolar'),
+('b0000000-0000-4000-8000-000000000080','preicfes'),
+('b0000000-0000-4000-8000-000000000081','musica'),
+('b0000000-0000-4000-8000-000000000082','idiomas'),
+('b0000000-0000-4000-8000-000000000083','preicfes'),
+('b0000000-0000-4000-8000-000000000083','refuerzo_escolar'),
+('b0000000-0000-4000-8000-000000000084','reposteria'),
+('b0000000-0000-4000-8000-000000000084','comida_casera'),
+('b0000000-0000-4000-8000-000000000085','domicilios'),
+('b0000000-0000-4000-8000-000000000085','mensajeria'),
+('b0000000-0000-4000-8000-000000000085','mandados'),
+('b0000000-0000-4000-8000-000000000086','marketing_redes'),
+('b0000000-0000-4000-8000-000000000086','diseno_grafico'),
+('b0000000-0000-4000-8000-000000000087','jornaleros'),
+('b0000000-0000-4000-8000-000000000087','fumigacion_cultivos'),
+('b0000000-0000-4000-8000-000000000088','asistencia_agro'),
+('b0000000-0000-4000-8000-000000000088','fumigacion_cultivos'),
+('b0000000-0000-4000-8000-000000000089','maquinaria_agricola'),
+('b0000000-0000-4000-8000-000000000090','contabilidad'),
+('b0000000-0000-4000-8000-000000000091','asesoria_legal'),
+('b0000000-0000-4000-8000-000000000092','fotografia_video'),
+('b0000000-0000-4000-8000-000000000093','decoracion_eventos'),
+('b0000000-0000-4000-8000-000000000093','animacion_infantil'),
+('b0000000-0000-4000-8000-000000000094','musica_dj'),
+('b0000000-0000-4000-8000-000000000095','carpinteria'),
+('b0000000-0000-4000-8000-000000000096','cerrajeria'),
+('b0000000-0000-4000-8000-000000000097','fisioterapia'),
+('b0000000-0000-4000-8000-000000000098','psicologia'),
+('b0000000-0000-4000-8000-000000000099','barberia'),
+('b0000000-0000-4000-8000-000000000100','mecanica'),
+('b0000000-0000-4000-8000-000000000100','lavado_autos'),
+('b0000000-0000-4000-8000-000000000101','diseno_grafico'),
+('b0000000-0000-4000-8000-000000000101','marketing_redes'),
+('b0000000-0000-4000-8000-000000000102','jardineria'),
+('b0000000-0000-4000-8000-000000000102','fumigacion'),
+('b0000000-0000-4000-8000-000000000103','electrodomesticos'),
+('b0000000-0000-4000-8000-000000000104','cuidado_ninos'),
+('b0000000-0000-4000-8000-000000000104','adulto_mayor'),
+('b0000000-0000-4000-8000-000000000105','peluqueria_canina'),
+('b0000000-0000-4000-8000-000000000105','cuidado_mascotas'),
+('b0000000-0000-4000-8000-000000000106','desarrollo_web'),
+('b0000000-0000-4000-8000-000000000106','redes'),
+('b0000000-0000-4000-8000-000000000106','camaras'),
+('b0000000-0000-4000-8000-000000000107','soldadura')
 on conflict do nothing;
 
 delete from portafolio where proveedor_id in (select p.id from proveedores p join perfiles pe on pe.id = p.perfil_id where pe.demo);
@@ -1396,10 +1554,11 @@ declare m municipios;
 begin
   select * into m from municipios where codigo = p_muni;
   insert into solicitudes (id, cliente_id, titulo, descripcion, servicio_id, departamento, municipio, lat, lng, metodo_pago,
-                           estado, proveedor_id, foto, creado, finalizado)
+                           estado, proveedor_id, foto, creado, finalizado, direccion)
   values (p_id, p_cliente, p_titulo, p_desc, p_servicio, m.departamento, p_muni,
           m.lat + p_norte / 110.574, m.lng + p_este / (111.32 * cos(radians(m.lat))),
-          p_pago, p_estado, p_proveedor, coalesce(p_foto, (select foto from servicios where id = p_servicio)), p_creado, p_final);
+          p_pago, p_estado, p_proveedor, coalesce(p_foto, (select foto from servicios where id = p_servicio)), p_creado, p_final,
+          (array['Barrio Centro', 'Barrio San Antonio', 'Barrio La Pradera', 'Barrio El Porvenir', 'Barrio Los Alpes'])[1 + abs(hashtext(p_id::text)) % 5]);
   if p_estado = 'buscando' then
     insert into solicitud_notificados (solicitud_id, proveedor_id, distancia_km)
     select p_id, x.proveedor_id, round(x.distancia::numeric, 2)
@@ -1496,6 +1655,13 @@ begin
   -- Otras ciudades
   perform cp_demo_sol('c0000000-0000-4000-8000-000000000031', camila, 'Aire no enfría', 'El aire acondicionado no enfría, posible falta de gas.', 'aire', '68001', 0.2, 0.3, 'tarjeta', now() - interval '30 minutes', 'buscando');
   perform cp_demo_sol('c0000000-0000-4000-8000-000000000032', felipe, 'Portátil lento', 'Mi portátil está muy lento, necesito formateo y limpieza.', 'computadores', '11001', -1.0, 2.0, 'transferencia', now() - interval '50 minutes', 'buscando');
+
+  -- Sectores nuevos
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000041', oscar, 'Refuerzo de matemáticas', 'Necesito clases de refuerzo de matemáticas para mi hijo de 9.º grado.', 'refuerzo_escolar', '54001', 1.0, -0.4, 'nequi', now() - interval '35 minutes', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000042', valeria, 'Torta de cumpleaños', 'Torta para 20 personas para el sábado, sabor chocolate.', 'reposteria', '54001', 0.4, 0.5, 'efectivo', now() - interval '1 hour', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000043', nataliap, 'Declaración de renta', 'Necesito ayuda para presentar la declaración de renta.', 'contabilidad', '54874', 0.1, 0.2, 'transferencia', now() - interval '2 hours', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000044', santiago, 'Asesoría para cultivo de aguacate', 'Tengo una finca pequeña y quiero asesoría para fertilizar el cultivo de aguacate.', 'asistencia_agro', '05615', 2.0, 2.5, 'transferencia', now() - interval '3 hours', 'buscando');
+  perform cp_demo_sol('c0000000-0000-4000-8000-000000000045', pedro, 'Clases de inglés', 'Clases de inglés conversacional dos veces por semana.', 'idiomas', '05615', 3.1, 2.4, 'nequi', now() - interval '4 hours', 'buscando');
 
   -- Trabajo en curso de Carlos con María
   perform cp_demo_sol('c0000000-0000-4000-8000-000000000017', maria, 'Revisión de tubería del patio', 'Hay humedad en la pared del patio, posible tubería rota.', 'plomeria', '05615', 1.6, 1.8, 'efectivo', now() - interval '1 day', 'en_curso', v_carlos);

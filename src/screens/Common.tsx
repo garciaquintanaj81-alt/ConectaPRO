@@ -9,7 +9,7 @@ import { AppShell } from "../Layout";
 import { useStore } from "../store";
 import { Link, goBack, navigate } from "../router";
 import { Avatar, Badge, Button, Chip, Empty, Field, Modal, PageHeader, Toggle, clock, cx, inputCls, timeAgo, SERVICE_ICON } from "../ui";
-import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, serviceById } from "../data";
+import { CATEGORIES, PAYMENTS, PaymentMethod, SERVICES, ServiceId, serviceById } from "../data";
 import { UbicacionSelect } from "../geo";
 import { useBusy } from "../store";
 import { rpc } from "../api";
@@ -579,10 +579,10 @@ export function Barter() {
       <PageHeader title="Match por trueque" back="/explorar" sub="Intercambia habilidades sin usar dinero" />
       <div className="card grid gap-4 p-5 sm:grid-cols-2">
         <label className="block text-sm font-semibold">Yo ofrezco
-          <select value={offer} onChange={(e) => setOffer(e.target.value as ServiceId)} className={sel}>{SERVICES.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+          <select value={offer} onChange={(e) => setOffer(e.target.value as ServiceId)} className={sel}>{CATEGORIES.map((c) => <optgroup key={c.id} label={c.name}>{SERVICES.filter((x) => x.category === c.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</optgroup>)}</select>
         </label>
         <label className="block text-sm font-semibold">Yo necesito
-          <select value={need} onChange={(e) => setNeed(e.target.value as ServiceId)} className={sel}>{SERVICES.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+          <select value={need} onChange={(e) => setNeed(e.target.value as ServiceId)} className={sel}>{CATEGORIES.map((c) => <optgroup key={c.id} label={c.name}>{SERVICES.filter((x) => x.category === c.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</optgroup>)}</select>
         </label>
         <div className="sm:col-span-2"><UbicacionSelect variant="compact" allowAll value={ubic} onChange={(v) => setUbic({ departamento: v.departamento, municipio: "" })} className="[&>label:last-child]:hidden sm:!grid-cols-1" /></div>
       </div>
