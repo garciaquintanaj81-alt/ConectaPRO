@@ -1163,6 +1163,7 @@ insert into categorias (id, nombre, corto, descripcion, orden) values
 ('eventos','Eventos','Eventos','Decoración, fotografía, música y comida',11),
 ('mas','Otros servicios','Otros','Cuidado de personas, mandados y más',12)
 on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, descripcion = excluded.descripcion, orden = excluded.orden;
+update categorias set principal = (id in ('hogar', 'belleza', 'eventos'));
 
 insert into servicios (id, nombre, corto, categoria, foto, palabras, orden) values
 ('plomeria','Plomería','Plomería','hogar','img/plomeria.jpg','fuga tuberia agua grifo griferia lavaplatos sanitario baño desague cañeria tanque',0),
@@ -1229,10 +1230,11 @@ insert into servicios (id, nombre, corto, categoria, foto, palabras, orden) valu
 ('musica_dj','Música y DJ','DJ','eventos',null,'dj sonido musica fiesta',61),
 ('catering','Catering y meseros','Catering','eventos',null,'comida evento meseros banquete',62),
 ('animacion_infantil','Animación infantil','Animación','eventos',null,'recreacion niños payaso fiesta infantil',63),
-('cuidado_ninos','Cuidado de niños','Niñera','mas',null,'niñera cuidar niños bebe',64),
-('adulto_mayor','Acompañamiento adulto mayor','Adulto mayor','mas',null,'acompañante abuelo cuidado',65),
-('mandados','Mandados y diligencias','Mandados','mas',null,'diligencia mandado tramite fila',66),
-('otro','Otro servicio','Otro','mas',null,'otro',67)
+('desayunos_sorpresa','Desayunos y detalles sorpresa','Desayunos sorpresa','eventos',null,'desayuno sorpresa detalle regalo cumpleaños aniversario ancheta',64),
+('cuidado_ninos','Cuidado de niños','Niñera','mas',null,'niñera cuidar niños bebe',65),
+('adulto_mayor','Acompañamiento adulto mayor','Adulto mayor','mas',null,'acompañante abuelo cuidado',66),
+('mandados','Mandados y diligencias','Mandados','mas',null,'diligencia mandado tramite fila',67),
+('otro','Otro servicio','Otro','mas',null,'otro',68)
 on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, categoria = excluded.categoria, foto = excluded.foto, palabras = excluded.palabras, orden = excluded.orden;
 
 insert into aliados (id, marca, oferta, costo, color) values
@@ -1244,7 +1246,7 @@ on conflict (id) do update set marca = excluded.marca, oferta = excluded.oferta,
 
 select setval('aliados_id_seq', (select max(id) from aliados));
 
-insert into config (clave, valor) values ('auto_respuesta_demo','true'),('demo_login_1','daniela@conectapro.co'),('demo_login_2','carlos@conectapro.co'),('demo_login_3','juan@conectapro.co'),('demo_login_4','andres@conectapro.co') on conflict (clave) do update set valor = excluded.valor;
+insert into config (clave, valor) values ('demo_login_1','daniela@conectapro.co'),('demo_login_2','carlos@conectapro.co'),('demo_login_3','juan@conectapro.co'),('demo_login_4','andres@conectapro.co') on conflict (clave) do update set valor = excluded.valor;
 
 insert into perfiles (id, nombre, correo, foto, celular, documento, departamento, municipio, puntos, calificacion, num_resenas, verificado, demo) values
 ('a0000000-0000-4000-8000-000000000001','Daniela Jaramillo','daniela@conectapro.co','img/daniela.jpg','3009876543','1000000001','05','05615',320,4.9,14,true,true),

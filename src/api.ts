@@ -106,6 +106,53 @@ export async function signOut() {
   if (tok) fetch(`${BASE}/auth/v1/logout`, { method: "POST", headers: headers(tok) }).catch(() => {});
 }
 
+// ---------------------------------------------------------------------
+//  Supabase Storage (fotos de perfil)
+// ---------------------------------------------------------------------
+export const PHOTO_BUCKET = "fotos-perfil";
+
+/** Convierte la referencia de foto que entrega la base de datos en una URL para <img> */
+export function photoSrc(photo?: string | null): string | undefined {
+  if (!photo) return undefined;
+  if (photo.startsWith("sb:")) return `${BASE}/storage/v1/object/public/${photo.slice(3)}`;
+  return photo;
+}
+
+async function storageFetch(path: string, init: RequestInit) {
+  if (session && session.expires_at * 1000 - Date.now() < 60_000) await refresh();
+  const h = { apikey: cfg.anonKey, Authorization: `Bearer ${session?.access_token ?? ""}`, ...(init.headers as Record<string, string>) };
+  let res: Response;
+  try { res = await fetch(`${BASE}/storage/v1/object/${path}`, { ...init, headers: h }); }
+  catch (e: any) { throw new ApiError(traducir(e.message), 0); }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    const m = String(j.message || j.error || res.status);
+    if (/row-level security|Unauthorized/i.test(m)) throw new ApiError("No tienes permiso para guardar esa foto", res.status);
+    if (/exceeded|too large/i.test(m)) throw new ApiError("La foto es demasiado grande (máximo 2 MB)", res.status);
+    if (/mime/i.test(m)) throw new ApiError("Formato no permitido. Usa una foto JPG, PNG o WEBP", res.status);
+    if (/Bucket not found/i.test(m)) throw new ApiError("El almacenamiento de fotos no está configurado en el servidor (ejecuta supabase/storage.sql)", res.status);
+    throw new ApiError(traducir(m), res.status);
+  }
+  return res;
+}
+
+/** Sube una imagen a la carpeta del usuario y devuelve su ruta dentro del bucket */
+export async function uploadPhoto(blob: Blob): Promise<string> {
+  if (!session) throw new ApiError("Debes iniciar sesión");
+  const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+  const id = (crypto as any).randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const ruta = `${session.user.id}/${id}.${ext}`;
+  await storageFetch(`${PHOTO_BUCKET}/${ruta}`, { method: "POST", headers: { "Content-Type": blob.type, "x-upsert": "false", "cache-control": "max-age=31536000" }, body: blob });
+  return ruta;
+}
+
+/** Borra archivos propios del bucket (no falla si ya no existen) */
+export async function deletePhotos(rutas: string[]) {
+  const list = rutas.filter(Boolean);
+  if (!list.length || !session) return;
+  await storageFetch(PHOTO_BUCKET, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefixes: list }) });
+}
+
 /** Llama a una función api_* de la base de datos */
 export async function rpc<T = any>(fn: string, args: Record<string, unknown> = {}): Promise<T> {
   if (!isConfigured) throw new ApiError("La plataforma no está conectada a la base de datos (falta config.js)");

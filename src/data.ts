@@ -17,8 +17,8 @@ export const PAYMENTS: Record<PaymentMethod, string> = {
 export type CategoryId = string;
 export type ServiceId = string;
 
-export interface Category { id: CategoryId; name: string; short: string; description?: string; providers?: number; tint: string }
-export interface Service { id: ServiceId; name: string; short: string; category: CategoryId; photo?: string }
+export interface Category { id: CategoryId; name: string; short: string; description?: string; providers?: number; main?: boolean; tint: string }
+export interface Service { id: ServiceId; name: string; short: string; category: CategoryId; photo?: string; providers?: number }
 
 // Colores de cada categoría (solo presentación)
 const TINTS: Record<string, string> = {
@@ -85,6 +85,11 @@ export interface Provider {
   availability?: "ahora" | "hoy" | "otro";
   distanceKm?: number;
   ubicacion?: "local" | "cobertura";
+  /** true = lat/lng son el punto exacto (propio o autorizado); false = aproximado (~1 km) */
+  exactLocation?: boolean;
+  publicLocation?: boolean;
+  /** Cuenta de prueba (QA) */
+  test?: boolean;
   resenas?: { name: string; stars: number; text: string; date: string }[];
 }
 
@@ -102,9 +107,15 @@ export interface Account {
   providerId?: string;
   verified?: boolean;
   demo?: boolean;
+  /** Cuenta de prueba (QA) */
+  test?: boolean;
+  /** La foto está guardada en Supabase Storage (ruta dentro del bucket) */
+  photoStored?: boolean;
+  photoPath?: string | null;
+  photoPrivacy?: "todos" | "contactos";
 }
 
-export interface ClientInfo { id?: string; name: string; photo?: string; rating: number; reviews: number }
+export interface ClientInfo { id?: string; name: string; photo?: string; rating: number; reviews: number; test?: boolean }
 
 export interface Address { id: string; name: string; address: string; departamento: string; municipio: string; label: string }
 export interface PayMethod { id: string; type: PaymentMethod; detail: string; default: boolean }
@@ -114,5 +125,7 @@ export interface PayMethod { id: string; type: PaymentMethod; detail: string; de
 // ---------------------------------------------------------------------
 export const money = (n: number) => "$" + Math.round(n).toLocaleString("es-CO");
 
-/** Contraseña de las cuentas de demostración */
+/** Contraseña de las cuentas de demostración (solo para el simulador externo) */
 export const DEMO_PASSWORD = "Conecta2026*";
+/** Contraseña de las cuentas de prueba (QA) */
+export const TEST_PASSWORD = "Prueba2026*";

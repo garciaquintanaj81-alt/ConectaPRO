@@ -103,6 +103,7 @@ export function Simulator() {
           <Link to="/" className="rounded-full p-2 hover:bg-white" ><LuArrowLeft className="h-6 w-6" /></Link>
           <Logo size="sm" />
           <div className="ml-auto flex gap-2">
+            <Link to="/pruebas" className="inline-flex items-center rounded-2xl bg-white px-4 py-2.5 text-sm font-bold ring-1 ring-line hover:ring-brand/40">Cuentas de prueba (QA)</Link>
             <Button variant="outline" icon={LuRefreshCw} className="px-4 py-2.5 text-sm" disabled={resetting} onClick={restart}>{resetting ? "Reiniciando…" : "Reiniciar simulación"}</Button>
           </div>
         </header>
@@ -111,6 +112,7 @@ export function Simulator() {
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">Simulación en vivo <span className="text-brand-gradient">cliente ⇄ proveedor</span></h1>
             <p className="mt-2 max-w-3xl text-lg text-ink-soft">Cuatro usuarios usan ConectaPRO al mismo tiempo. Lo que hace uno le llega a los otros como notificación en tiempo real, igual que en la plataforma final.</p>
+            <p className="mt-2 max-w-3xl text-sm text-ink-soft">Herramienta externa de demostración: estas cuentas y sus datos de ejemplo viven aparte y <b>nunca se muestran a los usuarios reales</b> de la plataforma.</p>
           </div>
         </div>
 
@@ -155,7 +157,7 @@ export function SimulatorLink({ className }: { className?: string }) {
   return (
     <Link to="/simulador" className={cx("flex items-center gap-3 rounded-2xl bg-gradient-to-r from-[#2463ff] via-[#4b3cf3] to-[#8a2cf0] p-4 text-white shadow-brand transition hover:brightness-110", className)}>
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/20"><LuPlay className="h-5 w-5 fill-white" /></span>
-      <div className="text-left"><div className="font-bold">Ver simulación en vivo</div><div className="text-xs opacity-90">2 clientes y 2 proveedores interactuando</div></div>
+      <div className="text-left"><div className="font-bold">Ver simulación en vivo</div><div className="text-xs opacity-90">Herramienta de demostración con datos de ejemplo</div></div>
     </Link>
   );
 }

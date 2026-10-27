@@ -8,8 +8,8 @@ import { AppShell, MobileTopBar } from "../Layout";
 import { Request, useStore } from "../store";
 import { Link, navigate } from "../router";
 import {
-  Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars,
-  PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, CATEGORY_ICON, agreementWhen, cx, shortDate, timeAgo,
+  Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars, TestBadge, Toggle,
+  PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, CATEGORY_ICON, agreementWhen, cx, mainCategories, shortDate, timeAgo,
 } from "../ui";
 import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, money, serviceById, CATEGORIES } from "../data";
 import { UbicacionSelect, useGeolocation, GEO_MSG } from "../geo";
@@ -112,15 +112,15 @@ function OpportunityCard({ r, distance }: { r: Request; distance: number }) {
   return (
     <div className="card animate-fade-up p-4 sm:p-5">
       <Link to={"/oportunidad/" + r.id} className="flex gap-4">
-        <Avatar name={c.name} photo={c.photo} size={56} dot="on" />
+        <Avatar name={c.name} photo={c.photo} size={56} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-base font-bold">{serviceById(r.service).name}</span>{isNew && <Badge tone="ok">Nueva</Badge>}
-            <span className="ml-auto hidden text-sm text-ink-soft lg:inline">{c.name.split(" ")[0]} {c.name.split(" ")[1]?.[0]}. · <Rating value={c.rating} className="text-sm" /></span>
+            <span className="text-base font-bold">{serviceById(r.service).name}</span>{isNew && <Badge tone="ok">Nueva</Badge>}{c.test && <TestBadge />}
+            <span className="ml-auto hidden text-sm text-ink-soft lg:inline">{c.name.split(" ")[0]} {c.name.split(" ")[1]?.[0]}. · <Rating value={c.rating} count={c.reviews} className="text-sm" /></span>
           </div>
           <p className="mt-1 line-clamp-2 text-[15px] leading-snug text-ink-soft">{r.desc}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-soft">
-            <span className="inline-flex items-center gap-1 font-semibold text-brand-blue"><LuMapPin className="h-4 w-4" />{distance.toFixed(1)} km</span>
+            <span className="inline-flex items-center gap-1 font-semibold text-brand-blue"><LuMapPin className="h-4 w-4" />≈ {distance.toFixed(1)} km · {r.municipioNombre}</span>
             <span className="inline-flex items-center gap-1"><LuClock className="h-4 w-4" />{timeAgo(r.createdAt)}</span>
             <span className="inline-flex items-center gap-1"><PIcon className={cx("h-4 w-4", PAYMENT_COLOR[r.payment])} />{PAYMENTS[r.payment].split(" ")[0]}</span>
             <LuChevronRight className="ml-auto h-5 w-5 text-ink-soft lg:hidden" />
@@ -188,6 +188,7 @@ export function OpportunityDetail({ id }: { id: string }) {
   if (!r || !myProvider) return <AppShell><Empty icon={LuClipboardList} title="Esta oportunidad ya no está disponible" text="Es posible que el cliente ya haya elegido a otro proveedor o la haya cancelado." action={<Button onClick={() => navigate("/oportunidades")}>Ver oportunidades</Button>} /></AppShell>;
   const c = clientInfo(r.clientKey);
   const d = distanceKm(myProvider, r.location);
+  const mine = r.providerId === myProvider.id;
   const applied = r.applicants.find((a) => a.providerId === myProvider.id);
   const taken = r.status !== "buscando";
   const PIcon = PAYMENT_ICON[r.payment];
@@ -198,17 +199,21 @@ export function OpportunityDetail({ id }: { id: string }) {
       <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[1fr_360px]">
         <div className="card p-6">
           <div className="flex items-center gap-4">
-            <Avatar name={c.name} photo={c.photo} size={72} dot="on" />
-            <div><div className="text-xl font-extrabold">{c.name}</div><Rating value={c.rating} count={c.reviews} /> <span className="text-sm text-ink-soft">como cliente</span></div>
+            <Avatar name={c.name} photo={c.photo} size={72} />
+            <div><div className="flex flex-wrap items-center gap-2 text-xl font-extrabold">{c.name}{c.test && <TestBadge />}</div><Rating value={c.rating} count={c.reviews} /> <span className="text-sm text-ink-soft">como cliente</span></div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             <Badge tone="brand" icon={SERVICE_ICON[r.service]}>{serviceById(r.service).name}</Badge>
-            <Badge tone="soft" icon={LuMapPin}>A {d.toFixed(1)} km</Badge>
+            <Badge tone="soft" icon={LuMapPin}>{r.location.approximate ? "≈ " : "A "}{d.toFixed(1)} km</Badge>
             <Badge tone="soft" icon={LuClock}>{timeAgo(r.createdAt)}</Badge>
           </div>
           <h1 className="mt-5 text-2xl font-extrabold">{r.title}</h1>
           <p className="mt-2 text-lg text-ink-soft">{r.desc}</p>
-          <MapMock className="mt-5 h-48" />
+          <div className="mt-5 flex items-start gap-3 rounded-2xl bg-surface p-4">
+            <LuMapPin className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
+            <div><div className="font-semibold">{r.location.label}</div>
+              <div className="text-sm text-ink-soft">{r.location.approximate && !mine ? "Zona aproximada. La dirección exacta solo se comparte con el proveedor que el cliente contrate." : "Dirección del servicio"}</div></div>
+          </div>
           <div className="mt-4 flex items-center gap-3 text-lg"><PIcon className={cx("h-6 w-6", PAYMENT_COLOR[r.payment])} /> Pago en <b>{PAYMENTS[r.payment]}</b></div>
         </div>
         <div className="card self-start p-6">
@@ -224,7 +229,7 @@ export function OpportunityDetail({ id }: { id: string }) {
           ) : applied ? (
             <>
               <Badge tone="ok" icon={LuCircleCheck} className="text-base">Te postulaste</Badge>
-              <p className="mt-3 text-ink-soft">Propusiste <b className="text-ink">{money(applied.price)}</b>. El cliente verá tu perfil ordenado según tu calificación ({myProvider.rating.toFixed(1)} ⭐).</p>
+              <p className="mt-3 text-ink-soft">Propusiste <b className="text-ink">{money(applied.price)}</b>. El cliente comparará tu oferta con las demás y te avisaremos si te elige. Puedes cambiar tu precio enviando una nueva propuesta.</p>
               <Button variant="soft" className="mt-5 w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Escribir al cliente</Button>
             </>
           ) : (
@@ -400,6 +405,8 @@ export function MyService() {
   const [about, setAbout] = useState(p?.about ?? "");
   const [offers, setOffers] = useState((p?.offers ?? []).join("\n"));
   const [gallery, setGallery] = useState<string[]>(p?.portfolio ?? []);
+  const [publicLocation, setPublicLocation] = useState(p?.publicLocation ?? false);
+  const [moreCats, setMoreCats] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const isNew = !p;
@@ -422,7 +429,7 @@ export function MyService() {
         services, departamento: ubic.departamento, municipio: ubic.municipio, coverageKm: coverage,
         days: [...days].sort(), from, to, priceMin, priceMax, about: about.trim(),
         ...(geo.fix ? { lat: geo.fix.lat, lng: geo.fix.lng } : {}),
-        offers: offers.split("\n").map((s) => s.trim()).filter(Boolean), portfolio: gallery,
+        offers: offers.split("\n").map((s) => s.trim()).filter(Boolean), portfolio: gallery, publicLocation,
       });
       toast(isNew ? "¡Perfil de proveedor creado! Ya puedes recibir oportunidades" : "Cambios guardados");
       navigate("/inicio");
@@ -455,7 +462,12 @@ export function MyService() {
             </div>
           )}
           <div className="mt-4 divide-y divide-line rounded-xl ring-1 ring-line">
-            {CATEGORIES.map((c) => {
+            {(() => {
+              const main = mainCategories();
+              const rest = CATEGORIES.filter((c) => !main.includes(c));
+              const showAll = moreCats || rest.some((c) => SERVICES.some((s) => s.category === c.id && services.includes(s.id)));
+              return showAll ? [...main, ...rest] : main;
+            })().map((c) => {
               const subs = SERVICES.filter((s) => s.category === c.id);
               const n = subs.filter((s) => services.includes(s.id)).length;
               const open = openCat === c.id;
@@ -476,6 +488,9 @@ export function MyService() {
                 </div>
               );
             })}
+            <button type="button" onClick={() => setMoreCats(!moreCats)} className="flex w-full items-center justify-center gap-1.5 px-4 py-3 text-sm font-semibold text-brand">
+              {moreCats ? "Ver menos sectores" : "Ver más sectores"}<LuChevronDown className={cx("h-4 w-4 transition", moreCats && "rotate-180")} />
+            </button>
           </div>
         </section>
 
@@ -492,7 +507,13 @@ export function MyService() {
           <label className="block text-sm font-semibold">Zona de cobertura: <span className="text-brand">hasta {coverage} km</span>
             <input type="range" min={1} max={50} value={coverage} onChange={(e) => setCoverage(+e.target.value)} className="mt-3 w-full accent-brand" />
           </label>
-          <MapMock className="h-40" />
+          <div className="flex items-center gap-4 rounded-xl ring-1 ring-line p-4">
+            <div className="flex-1">
+              <div className="text-sm font-semibold">Mostrar mi ubicación exacta a los clientes</div>
+              <p className="text-xs text-ink-soft">{publicLocation ? "Los clientes verán tu punto exacto de atención." : "Desactivado: los clientes solo ven tu municipio y una zona aproximada (~1 km). Las distancias se calculan igual."}</p>
+            </div>
+            <Toggle on={publicLocation} onChange={setPublicLocation} label="Mostrar ubicación exacta" />
+          </div>
         </section>
 
         <section className="card space-y-4 p-6">

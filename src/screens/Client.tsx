@@ -10,9 +10,10 @@ import { AppShell, MobileTopBar } from "../Layout";
 import { useStore, Request } from "../store";
 import { Link, navigate } from "../router";
 import {
-  Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars, Stepper, Toggle,
+  Avatar, Badge, Button, CategoryPicker, Chip, Empty, Modal, PageHeader, Rating, SectionTitle, Stars, Stepper, TestBadge, Toggle,
   CATEGORY_ICON, localISO, PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, clock, cx, shortDate, timeAgo,
 } from "../ui";
+import { GPS_MSG, ZonaChip } from "../zona";
 import { CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById, servicesOf, categoryById } from "../data";
 import { availability, availabilityLabel, distanceKm, predictRoutines, scheduleLabel } from "../matching";
 import { rpc } from "../api";
@@ -25,7 +26,7 @@ const query = () => new URLSearchParams(window.location.hash.split("?")[1] ?? ""
 //  Inicio (cliente)
 // =====================================================================
 export function ClientHome() {
-  const { account, myRequests, getProvider, prefs } = useStore();
+  const { account, myRequests, getProvider, prefs, zona } = useStore();
   const [q, setQ] = useState("");
 
   const suggestions = useMemo(() => {
@@ -34,19 +35,23 @@ export function ClientHome() {
   }, [myRequests, prefs]);
 
   const active = myRequests.filter((r) => r.status === "en_curso" || r.status === "buscando");
-  // Proveedores mejor calificados en el municipio del usuario (consulta a la base de datos)
-  const [featured, setFeatured] = useState<Provider[]>([]);
+  // Proveedores reales de la zona elegida (municipio del perfil, otra ciudad o la ubicación actual)
+  const gps = zona?.fuente === "gps";
+  const [featured, setFeatured] = useState<Provider[] | null>(null);
   useEffect(() => {
-    if (!account?.municipio) return;
-    rpc<{ resultados: Provider[] }>("api_buscar_proveedores", { p_departamento: account.departamento, p_municipio: account.municipio, p_orden: "rating" })
-      .then((r) => setFeatured(r.resultados.filter((p) => p.ubicacion === "local").slice(0, 4))).catch(() => setFeatured([]));
-  }, [account?.municipio]);
-  const populares = ["plomeria", "electricidad", "limpieza", "peluqueria", "refuerzo_escolar", "mudanzas"].map((id) => serviceById(id)).filter((x) => x.name !== x.id);
+    if (!zona?.municipio) return;
+    let alive = true;
+    rpc<{ resultados: Provider[] }>("api_buscar_proveedores", {
+      p_departamento: zona.departamento, p_municipio: zona.municipio, p_orden: gps ? "distance" : "rating",
+      p_lat: gps ? zona.lat : null, p_lng: gps ? zona.lng : null,
+    }).then((r) => alive && setFeatured(r.resultados.slice(0, 4))).catch(() => alive && setFeatured([]));
+    return () => { alive = false; };
+  }, [zona?.municipio, gps ? Math.round((zona?.lat ?? 0) * 200) + ":" + Math.round((zona?.lng ?? 0) * 200) : ""]);
 
   return (
     <AppShell>
       <MobileTopBar />
-      <div className="grid gap-10 xl:grid-cols-[1fr_320px]">
+      <div className="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_320px] [&>*]:min-w-0">
         <div className="min-w-0">
           <h1 className="text-[28px] font-extrabold leading-tight tracking-tight sm:text-[32px]">Hola, {account?.name.split(" ")[0]}</h1>
           <p className="mt-1 text-ink-soft">¿Qué servicio necesitas hoy?</p>
@@ -58,11 +63,6 @@ export function ClientHome() {
             </label>
             <Button type="submit" className="rounded-xl px-5">Buscar</Button>
           </form>
-          <div className="mt-3 flex flex-wrap gap-2 text-sm">
-            {populares.map((p) => (
-              <Link key={p.id} to={"/publicar?servicio=" + p.id} className="rounded-full bg-white px-3 py-1.5 font-medium text-ink-soft ring-1 ring-line hover:text-brand hover:ring-brand/40">{p.short}</Link>
-            ))}
-          </div>
 
           {suggestions.map((s) => {
             const p = getProvider(s.providerId);
@@ -79,17 +79,7 @@ export function ClientHome() {
             <h2 className="text-lg font-bold">Sectores</h2>
             <Link to="/explorar" className="text-sm font-semibold text-brand">Explorar todo</Link>
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-2.5 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-6">
-            {CATEGORIES.map((c) => {
-              const Icon = CATEGORY_ICON[c.id];
-              return (
-                <Link key={c.id} to={"/explorar?cat=" + c.id} className="group flex flex-col items-center gap-2 rounded-xl bg-white px-1.5 py-3 text-center ring-1 ring-line transition hover:ring-brand/40" title={c.description}>
-                  <span className={cx("flex h-10 w-10 items-center justify-center rounded-lg", c.tint)}><Icon className="h-5 w-5" /></span>
-                  <span className="text-[12.5px] font-semibold leading-tight sm:text-[13.5px]">{c.short}</span>
-                </Link>
-              );
-            })}
-          </div>
+          <div className="mt-3"><CategoryPicker variant="tiles" hrefFor={(id) => "/explorar?cat=" + id} /></div>
         </div>
 
         <aside className="space-y-8">
@@ -108,19 +98,21 @@ export function ClientHome() {
             )}
           </section>
           <section>
-            <div className="mb-3 flex items-baseline justify-between">
-              <h2 className="text-lg font-bold">Mejor calificados en {account?.city.split(",")[0]}</h2>
+            <div className="mb-3 flex items-baseline justify-between gap-2">
+              <h2 className="text-lg font-bold">{gps ? "Cerca de ti" : "Proveedores en " + (zona?.label.split(",")[0] ?? "tu zona")}</h2>
+              <Link to={zona ? `/explorar?dep=${zona.departamento}&mun=${zona.municipio}` : "/explorar"} className="shrink-0 text-sm font-semibold text-brand">Ver todos</Link>
             </div>
             <div className="card divide-y divide-line">
-              {featured.length === 0 && <p className="p-5 text-center text-sm text-ink-soft">Aún no hay proveedores registrados en tu municipio.</p>}
-              {featured.map((p) => (
+              {featured === null && <div className="h-24 animate-pulse" />}
+              {featured?.length === 0 && <p className="p-5 text-center text-sm text-ink-soft">Todavía no hay proveedores registrados en {zona?.label.split(",")[0] ?? "tu zona"}. Puedes publicar tu necesidad y te avisaremos cuando alguien compatible la vea.</p>}
+              {featured?.map((p) => (
                 <Link key={p.id} to={"/proveedor/" + p.id} className="flex items-center gap-3 px-4 py-3 hover:bg-surface/60">
                   <Avatar name={p.name} photo={p.photo} size={40} dot={(p.availability ?? availability(p.schedule)) === "ahora" ? "on" : "away"} />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[15px] font-semibold">{p.name}</div>
-                    <div className="truncate text-xs text-ink-soft">{p.profession}</div>
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[15px] font-semibold"><span className="min-w-0 truncate">{p.name}</span>{p.test && <TestBadge />}</div>
+                    <div className="truncate text-xs text-ink-soft">{p.profession}{p.distanceKm != null && ` · ${gps ? "≈ " : ""}${p.distanceKm} km`}</div>
                   </div>
-                  <Rating value={p.rating} className="text-sm" />
+                  <Rating value={p.rating} count={p.reviews} className="text-sm" />
                 </Link>
               ))}
             </div>
@@ -144,7 +136,7 @@ function ActiveCard({ r }: { r: Request }) {
         {r.status === "en_curso" && r.agreement ? (
           <div className="text-sm text-ink-soft">{p?.name} · {agreementWhen(r.agreement.date, r.agreement.time)}</div>
         ) : (
-          <div className="text-sm font-semibold text-brand">{apps > 0 ? `${apps} proveedor${apps > 1 ? "es" : ""} aceptaron` : "Buscando proveedores…"}</div>
+          <div className="text-sm font-semibold text-brand">{apps > 0 ? `${apps} oferta${apps > 1 ? "s" : ""} recibida${apps > 1 ? "s" : ""}` : "Esperando postulaciones"}</div>
         )}
       </div>
       <LuChevronRight className="h-5 w-5 text-brand" />
@@ -157,9 +149,8 @@ function ActiveCard({ r }: { r: Request }) {
 //  (cada cambio consulta la base de datos: api_buscar_proveedores)
 // =====================================================================
 export function Explore() {
-  const { account } = useStore();
+  const { zona, usarUbicacionActual, gpsState } = useStore();
   const qp = query();
-  const geo = useGeolocation();
   const [q, setQ] = useState(qp.get("q") ?? "");
   const [debouncedQ, setDebouncedQ] = useState(q);
   const initialSub = qp.get("sub") ?? "";
@@ -167,8 +158,11 @@ export function Explore() {
   const [sub, setSub] = useState<string>(initialSub);
   const [sort, setSort] = useState<"rating" | "distance">("rating");
   const [onlyNow, setOnlyNow] = useState(false);
-  const [nearMe, setNearMe] = useState(false);
-  const [ubic, setUbic] = useState({ departamento: qp.get("dep") ?? account?.departamento ?? "", municipio: qp.get("mun") ?? account?.municipio ?? "" });
+  const [nearMe, setNearMe] = useState(zona?.fuente === "gps" && !qp.get("mun"));
+  const [ubic, setUbic] = useState({ departamento: qp.get("dep") ?? zona?.departamento ?? "", municipio: qp.get("mun") ?? zona?.municipio ?? "" });
+  const gpsFix = nearMe && zona?.fuente === "gps" ? zona : null;
+  // Con "Cerca de mí" activo, el municipio sigue a la ubicación actual (se actualiza en tiempo real)
+  useEffect(() => { if (gpsFix) setUbic({ departamento: gpsFix.departamento, municipio: gpsFix.municipio }); }, [gpsFix?.municipio]);
   const [data, setData] = useState<{ total: number; referencia: string | null; distanciaDesde: string; resultados: Provider[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -182,18 +176,18 @@ export function Explore() {
     rpc<NonNullable<typeof data>>("api_buscar_proveedores", {
       p_departamento: ubic.departamento || null, p_municipio: ubic.municipio || null,
       p_categoria: cat || null, p_servicio: sub || null, p_texto: debouncedQ.trim() || null, p_solo_ahora: onlyNow, p_orden: sort,
-      p_lat: nearMe && geo.fix ? geo.fix.lat : null, p_lng: nearMe && geo.fix ? geo.fix.lng : null,
+      p_lat: gpsFix ? gpsFix.lat : null, p_lng: gpsFix ? gpsFix.lng : null,
     })
       .then((r) => alive && setData(r))
       .catch((e) => alive && setError(e.message))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [ubic.departamento, ubic.municipio, cat, sub, debouncedQ, onlyNow, sort, nearMe, geo.fix?.at]);
+  }, [ubic.departamento, ubic.municipio, cat, sub, debouncedQ, onlyNow, sort, nearMe, gpsFix ? Math.round(gpsFix.lat! * 500) + ":" + Math.round(gpsFix.lng! * 500) : ""]);
 
   const toggleNear = async () => {
     if (nearMe) { setNearMe(false); setSort("rating"); return; }
-    const f = geo.fix ?? (await geo.request());
-    if (f) { setNearMe(true); setSort("distance"); }
+    const ok = zona?.fuente === "gps" || (await usarUbicacionActual());
+    if (ok) { setNearMe(true); setSort("distance"); }
   };
   const clearAll = () => { setQ(""); setCat(""); setSub(""); setOnlyNow(false); setNearMe(false); setSort("rating"); };
 
@@ -207,7 +201,7 @@ export function Explore() {
     <Link key={p.id} to={"/proveedor/" + p.id} className="card flex gap-3.5 p-4 transition hover:ring-brand/40">
       <Avatar name={p.name} photo={p.photo} size={56} dot={p.availability === "ahora" ? "on" : "away"} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 font-bold">{p.name}{p.verified && <LuBadgeCheck className="h-4 w-4 shrink-0 text-brand" />}</div>
+        <div className="flex flex-wrap items-center gap-1.5 font-bold">{p.name}{p.verified && <LuBadgeCheck className="h-4 w-4 shrink-0 text-brand" />}{p.test && <TestBadge />}</div>
         <div className="truncate text-sm text-ink-soft">{p.services.map((x) => serviceById(x).short).join(" · ")}</div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <Rating value={p.rating} count={p.reviews} />
@@ -227,26 +221,23 @@ export function Explore() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="¿Qué necesitas? Ej. lavadora, torta, inglés…" className="w-full bg-transparent outline-none" aria-label="Buscar" />
           {q && <button onClick={() => setQ("")} aria-label="Limpiar"><LuX className="h-5 w-5 text-ink-soft" /></button>}
         </label>
-        <UbicacionSelect variant="compact" allowAll value={ubic} onChange={setUbic} />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="relative block">
-            <select aria-label="Sector" className={sel} value={cat} onChange={(e) => { setCat(e.target.value); setSub(""); }}>
-              <option value="">Todos los sectores</option>
-              {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            <LuChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2" />
-          </label>
-          <label className="relative block">
-            <select aria-label="Subcategoría" className={sel} value={sub} disabled={!cat} onChange={(e) => setSub(e.target.value)}>
-              <option value="">{cat ? `Todas las subcategorías (${subs.length})` : "Primero elige un sector"}</option>
-              {subs.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-            </select>
-            <LuChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2" />
-          </label>
+        <UbicacionSelect variant="compact" allowAll value={ubic} onChange={(v) => { setUbic(v); setNearMe(false); if (sort === "distance") setSort("rating"); }} />
+        <div>
+          <div className="mb-2 text-sm font-semibold">Sector</div>
+          <CategoryPicker variant="chips" value={cat} showCount onChange={(id) => { setCat(id); setSub(""); }} />
         </div>
+        {cat && (
+          <label className="relative block">
+            <select aria-label="Subcategoría" className={sel} value={sub} onChange={(e) => setSub(e.target.value)}>
+              <option value="">{`Todas las subcategorías de ${categoryById(cat)?.short ?? "este sector"} (${subs.length})`}</option>
+              {subs.map((x) => <option key={x.id} value={x.id}>{x.name}{x.providers ? ` (${x.providers})` : ""}</option>)}
+            </select>
+            <LuChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2" />
+          </label>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <Chip active={onlyNow} onClick={() => setOnlyNow(!onlyNow)}>Disponible ahora</Chip>
-          <Chip active={nearMe} onClick={toggleNear}><LuLocateFixed className="mr-1 inline h-4 w-4" />{geo.status === "pidiendo" ? "Ubicando…" : "Cerca de mí"}</Chip>
+          <Chip active={nearMe} onClick={toggleNear}><LuLocateFixed className="mr-1 inline h-4 w-4" />{gpsState === "pidiendo" ? "Ubicando…" : "Cerca de mí"}</Chip>
           <label className="relative ml-auto">
             <select aria-label="Ordenar" value={sort} onChange={(e) => setSort(e.target.value as any)} className="appearance-none rounded-full bg-white py-2 pl-4 pr-9 text-sm font-semibold ring-1 ring-line">
               <option value="rating">Mejor calificados</option>
@@ -255,15 +246,15 @@ export function Explore() {
             <LuChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
           </label>
         </div>
-        {geo.status !== "ok" && GEO_MSG[geo.status] && <p className="text-xs text-ink-soft">{GEO_MSG[geo.status]}</p>}
-        {nearMe && geo.fix && <p className="text-xs text-ink-soft">Distancias medidas desde tu ubicación actual (precisión ±{geo.fix.accuracy} m). El filtro de departamento y municipio se mantiene.</p>}
+        {GPS_MSG[gpsState] && gpsState !== "pidiendo" && <p className="text-xs text-bad">{GPS_MSG[gpsState]}</p>}
+        {gpsFix && <p className="text-xs text-ink-soft">Distancias medidas desde tu ubicación actual en tiempo real (±{gpsFix.accuracy} m). Tu ubicación no se guarda ni se muestra a nadie. Puedes elegir otra ciudad arriba.</p>}
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3 text-sm text-ink-soft" aria-live="polite">
         <span data-testid="explorar-total">
           {loading ? "Buscando en la base de datos…" : error ? "" : `${data?.total ?? 0} proveedor${data?.total === 1 ? "" : "es"} ${data?.referencia ? "en " + data.referencia : "en toda Colombia"}${sub ? " · " + serviceById(sub).name : cat ? " · " + (categoryById(cat)?.short ?? "") : ""}`}
         </span>
-        {(q || cat || onlyNow || nearMe) && <button className="font-semibold text-brand" onClick={clearAll}>Limpiar filtros</button>}
+        {(q || cat || onlyNow || nearMe) && <button className="shrink-0 font-semibold text-brand" onClick={clearAll}>Limpiar filtros</button>}
       </div>
 
       {error ? (
@@ -271,7 +262,7 @@ export function Explore() {
       ) : loading && !data ? (
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="card h-28 animate-pulse" />)}</div>
       ) : list.length === 0 ? (
-        <div className="mt-6"><Empty icon={LuSearch} title="Sin resultados con estos filtros" text="Prueba con otro municipio, sector o subcategoría, o publica tu necesidad y el algoritmo avisará a los proveedores que la cubran." action={<Button onClick={() => navigate(sub ? "/publicar?servicio=" + sub : "/publicar")}>Publicar necesidad</Button>} /></div>
+        <div className="mt-6"><Empty icon={LuSearch} title="Todavía no hay resultados" text="Aún no hay proveedores registrados que coincidan con estos filtros. Prueba con otro municipio, sector o subcategoría, o publica tu necesidad: avisaremos a los proveedores compatibles cuando se registren." action={<Button onClick={() => navigate(sub ? "/publicar?servicio=" + sub : "/publicar")}>Publicar necesidad</Button>} /></div>
       ) : (
         <div className={cx("transition-opacity", loading && "opacity-60")}>
           {locales.length > 0 && (
@@ -306,12 +297,12 @@ export function Explore() {
 type Cercano = { codigo: string; nombre: string; departamento: string; departamentoNombre: string; distanciaKm: number };
 
 export function Publish() {
-  const { publishRequest, toast, strikes, account, addresses } = useStore();
+  const { publishRequest, toast, strikes, zona, addresses } = useStore();
   const pre = query().get("servicio") as ServiceId | null;
   const [cat, setCat] = useState<string>(pre ? serviceById(pre).category : "");
   const [service, setService] = useState<ServiceId>(pre ?? "");
   const [desc, setDesc] = useState(query().get("desc") ?? "");
-  const [ubic, setUbic] = useState({ departamento: account?.departamento ?? "", municipio: account?.municipio ?? "" });
+  const [ubic, setUbic] = useState({ departamento: zona?.departamento ?? "", municipio: zona?.municipio ?? "" });
   const [direccion, setDireccion] = useState("");
   const geo = useGeolocation();
   const [cercano, setCercano] = useState<Cercano | null>(null);
@@ -385,17 +376,10 @@ export function Publish() {
           <section className="card p-5">
             {step(1, "¿Qué necesitas?", !!service)}
             {!cat ? (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="list" aria-label="Sectores">
-                {CATEGORIES.map((x) => {
-                  const I = CATEGORY_ICON[x.id];
-                  return (
-                    <button key={x.id} onClick={() => { setCat(x.id); setService(""); }} className="flex items-center gap-2.5 rounded-xl p-3 text-left ring-1 ring-line hover:ring-brand/40">
-                      <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", x.tint)}><I className="h-[18px] w-[18px]" /></span>
-                      <span className="min-w-0 text-sm font-semibold leading-tight">{x.short}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <>
+                <p className="mb-3 text-sm text-ink-soft">Primero elige el sector; luego la subcategoría exacta de lo que necesitas.</p>
+                <CategoryPicker variant="list" onChange={(id) => { setCat(id); setService(""); }} />
+              </>
             ) : (
               <div>
                 <div className="flex items-center gap-3 rounded-xl bg-surface p-3">
@@ -410,7 +394,7 @@ export function Publish() {
                     return (
                       <button key={x.id} role="radio" aria-checked={service === x.id} onClick={() => { setService(x.id); setErr({ ...err, service: "" }); }}
                         className={cx("inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-medium transition", service === x.id ? "bg-brand text-white" : "bg-white ring-1 ring-line hover:ring-brand/40")}>
-                        <I className="h-4 w-4" />{x.name}
+                        <I className="h-4 w-4" />{x.name}{x.providers ? <span className={cx("text-xs", service === x.id ? "text-white/80" : "text-ink-soft")}>({x.providers})</span> : null}
                       </button>
                     );
                   })}
@@ -499,8 +483,8 @@ export function Publish() {
             <div className="flex items-center gap-2 font-bold text-brand"><LuRadar className="h-5 w-5" /> Vista previa del algoritmo</div>
             <p className="text-ink-soft">{preview == null ? "Elige la subcategoría y el municipio para ver cuántos proveedores pueden atenderte." : <><b className="text-2xl text-ink">{preview}</b><br />proveedores de {serviceById(service).name.toLowerCase()} cubren {ubic.municipio ? "este municipio" : "esta zona"}.</>}</p>
             <ul className="space-y-2 border-t border-line pt-4 text-ink-soft">
-              <li className="flex gap-2"><LuShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Solo se notifica a proveedores verificados de esa subcategoría.</li>
-              <li className="flex gap-2"><LuMapPin className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Tu dirección solo la ve el proveedor que contrates.</li>
+              <li className="flex gap-2"><LuShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Solo se notifica a proveedores de esa subcategoría cuya zona de cobertura incluye el lugar del servicio.</li>
+              <li className="flex gap-2"><LuMapPin className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Los proveedores ven solo el municipio y una zona aproximada. Tu dirección exacta solo la ve el proveedor que contrates.</li>
             </ul>
           </div>
         </aside>
@@ -540,15 +524,19 @@ export function Searching({ id }: { id: string }) {
     { icon: LuMapPin, t: "Mapa GPS", d: r.location.label },
     { icon: LuFilter, t: "Filtros de solicitud", d: `${serviceById(r.service).name} · ${PAYMENTS[r.payment]}` },
     { icon: LuBrain, t: "Algoritmo de emparejamiento", d: `${trace.total} proveedores → ${trace.byCategory} por categoría → ${trace.byCoverage} por cobertura → ${trace.bySchedule} en horario` },
-    { icon: LuBadgeCheck, t: "Proveedores compatibles", d: `${r.matched.length} notificados en tiempo real` },
+    { icon: LuBadgeCheck, t: "Proveedores compatibles", d: `${r.matchedCount} notificados en tiempo real` },
   ];
-  const pins = r.matched.slice(0, 6).map((pid, i) => ({ x: 50 + Math.cos(i * 1.7) * (22 + i * 4), y: 50 + Math.sin(i * 1.7) * (26 + i * 3), photo: getProvider(pid)?.photo }));
 
   return (
     <AppShell hideNav>
       <PageHeader title="Buscando proveedores" back="/solicitudes" sub={r.title} />
       <div className="grid gap-8 lg:grid-cols-2">
-        <MapMock className="h-64 sm:h-80 lg:h-[440px]" pins={stage >= 4 ? pins : []} />
+        <div className="card flex flex-col items-center justify-center gap-3 p-8 text-center lg:h-[440px]">
+          <span className="flex h-20 w-20 items-center justify-center rounded-full bg-brand-50 text-brand"><LuRadar className={cx("h-10 w-10", stage < 4 && "animate-pulse")} /></span>
+          <div className="text-5xl font-extrabold">{stage >= 4 ? r.matchedCount : "…"}</div>
+          <div className="font-semibold">proveedores compatibles notificados</div>
+          <p className="max-w-xs text-sm text-ink-soft">{r.location.label}</p>
+        </div>
         <div>
           <ol className="space-y-3">
             {steps.map((s, i) => {
@@ -569,19 +557,19 @@ export function Searching({ id }: { id: string }) {
           </ol>
           {stage >= 4 && (
             <div className="animate-fade-up mt-5 rounded-3xl bg-brand-50 p-5">
-              {r.matched.length === 0 ? (
+              {r.matchedCount === 0 ? (
                 <>
-                  <div className="font-bold">No hay proveedores disponibles en tu zona para esta categoría.</div>
-                  <p className="mt-1 text-sm text-ink-soft">Tu solicitud queda publicada y te avisaremos cuando alguien compatible se active.</p>
+                  <div className="font-bold">Todavía no hay proveedores registrados en tu zona para esta subcategoría.</div>
+                  <p className="mt-1 text-sm text-ink-soft">Tu solicitud queda publicada. Los proveedores compatibles que se registren podrán verla y postularse.</p>
                   <Button className="mt-4 w-full" onClick={() => navigate("/solicitudes")}>Ir a mis solicitudes</Button>
                 </>
               ) : (
                 <>
                   <div className="flex items-center gap-3">
                     <div className="flex -space-x-3">{apps.slice(0, 4).map((a) => { const p = getProvider(a.providerId); return p ? <Avatar key={a.providerId} name={p.name} photo={p.photo} size={40} /> : null; })}</div>
-                    <div className="font-bold">{apps.length === 0 ? "Esperando respuestas…" : `${apps.length} proveedor${apps.length > 1 ? "es" : ""} aceptaron tu solicitud`}</div>
+                    <div className="font-bold">{apps.length === 0 ? "Aún no hay postulaciones. Te avisaremos cuando un proveedor se postule." : `${apps.length} proveedor${apps.length > 1 ? "es" : ""} se postularon`}</div>
                   </div>
-                  <Button className="mt-4 w-full" icon={LuArrowRight} onClick={() => navigate("/proveedores/" + r.id)}>Ver proveedores compatibles</Button>
+                  <Button className="mt-4 w-full" icon={LuArrowRight} onClick={() => navigate("/proveedores/" + r.id)}>Ver y comparar ofertas</Button>
                 </>
               )}
             </div>
@@ -598,59 +586,80 @@ export function Searching({ id }: { id: string }) {
 export function CompatibleProviders({ id }: { id: string }) {
   const { findRequest, getProvider, visibleApplicants } = useStore();
   const r = findRequest(id);
-  const [sort, setSort] = useState<"rating" | "distance">("rating");
+  const [sort, setSort] = useState<"price" | "rating" | "distance">("price");
   const [nowOnly, setNowOnly] = useState(false);
   if (!r) return <NotFoundReq />;
   const apps = visibleApplicants(r);
-  const pending = r.applicants.length - apps.length;
   const rows = apps
     .map((a) => ({ a, p: getProvider(a.providerId)! }))
     .filter((x) => x.p)
-    .map(({ a, p }) => ({ a, p, d: distanceKm(r.location, p), av: p.availability ?? availability(p.schedule) }))
+    .map(({ a, p }) => ({ a, p, d: a.distanceKm ?? distanceKm(r.location, p), av: p.availability ?? availability(p.schedule) }))
     .filter((x) => !nowOnly || x.av === "ahora")
-    .sort((x, y) => (sort === "rating" ? y.p.rating - x.p.rating : x.d - y.d));
+    .sort((x, y) => (sort === "price" ? x.a.price - y.a.price : sort === "rating" ? (y.p.reviews ? y.p.rating : 0) - (x.p.reviews ? x.p.rating : 0) : x.d - y.d));
+  const minPrice = Math.min(...apps.map((a) => a.price));
 
   return (
     <AppShell>
-      <PageHeader title="Proveedores compatibles" back="/solicitudes" sub={<span className="hidden sm:inline">{r.title} · {serviceById(r.service).name}</span>} />
+      <PageHeader title="Compara las ofertas" back="/solicitudes" sub={<span className="hidden sm:inline">{r.title} · {serviceById(r.service).name}</span>} />
       <div className="-mx-4 flex gap-2.5 overflow-x-auto px-4 pb-1 scrollbar-none sm:mx-0 sm:px-0">
-        <Chip active={sort === "distance"} onClick={() => setSort("distance")} className={sort === "distance" ? "" : "!bg-brand-50 !text-brand !ring-0"}>Cerca de ti <LuChevronDown className="inline h-4 w-4" /></Chip>
-        <Chip active={nowOnly} onClick={() => setNowOnly(!nowOnly)}>Disponible ahora</Chip>
+        <Chip active={sort === "price"} onClick={() => setSort("price")}>Menor precio</Chip>
         <Chip active={sort === "rating"} onClick={() => setSort("rating")}>Mejor calificados</Chip>
+        <Chip active={sort === "distance"} onClick={() => setSort("distance")}>Más cercanos</Chip>
+        <Chip active={nowOnly} onClick={() => setNowOnly(!nowOnly)}>Disponible ahora</Chip>
       </div>
       {r.status !== "buscando" && (
         <div className="mt-4 rounded-2xl bg-ok-50 p-4 text-sm font-semibold text-ok">Esta solicitud ya tiene un acuerdo. <Link to={"/solicitud/" + r.id} className="underline">Ver detalle</Link></div>
       )}
+
+      {rows.length > 1 && (
+        <div className="card mt-5 overflow-x-auto p-0">
+          <table className="w-full min-w-[560px] text-left text-sm" data-testid="comparar-ofertas">
+            <thead className="bg-surface text-ink-soft">
+              <tr><th className="px-4 py-3 font-semibold">Proveedor</th><th className="px-4 py-3 font-semibold">Precio propuesto</th><th className="px-4 py-3 font-semibold">Calificación</th><th className="px-4 py-3 font-semibold">Distancia</th><th className="px-4 py-3" /></tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {rows.map(({ a, p, d }) => (
+                <tr key={p.id}>
+                  <td className="px-4 py-3"><div className="flex items-center gap-2 font-semibold"><Avatar name={p.name} photo={p.photo} size={32} />{p.name}{p.test && <TestBadge />}</div></td>
+                  <td className="px-4 py-3 font-extrabold">{money(a.price)}{a.price === minPrice && <Badge tone="ok" className="ml-2 px-2 py-0.5 text-[11px]">Menor</Badge>}</td>
+                  <td className="px-4 py-3"><Rating value={p.rating} count={p.reviews} /></td>
+                  <td className="px-4 py-3 text-ink-soft">{d.toFixed(1)} km</td>
+                  <td className="px-4 py-3 text-right">{r.status === "buscando" && <Link to={`/acuerdo/${r.id}/${p.id}`} className="font-bold text-brand">Elegir</Link>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {rows.map(({ a, p, d, av }) => (
           <div key={p.id} className="card animate-fade-up p-5">
             <div className="flex gap-4">
-              <Avatar name={p.name} photo={p.photo} size={96} dot={av === "ahora" ? "on" : "away"} />
+              <Avatar name={p.name} photo={p.photo} size={88} dot={av === "ahora" ? "on" : "away"} />
               <div className="min-w-0 flex-1">
-                <div className="text-xl font-extrabold">{p.name}</div>
+                <div className="flex flex-wrap items-center gap-1.5 text-xl font-extrabold">{p.name}{p.test && <TestBadge />}</div>
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-                  <Rating value={p.rating} count={p.reviews} className="text-lg" />
+                  <Rating value={p.rating} count={p.reviews} />
                   <span className="inline-flex items-center gap-1 text-ink-soft"><LuMapPin className="h-4 w-4" />A {d.toFixed(1)} km</span>
                 </div>
-                <div className={cx("mt-1 flex items-center gap-1.5 font-semibold", av === "otro" ? "text-warn" : "text-ok")}>
-                  {av === "ahora" ? <LuCircleCheck className="h-5 w-5" /> : <LuCircleDot className="h-5 w-5" />}{availabilityLabel[av]}
+                <div className={cx("mt-1 flex items-center gap-1.5 text-sm font-semibold", av === "otro" ? "text-warn" : "text-ok")}>
+                  {av === "ahora" ? <LuCircleCheck className="h-4 w-4" /> : <LuCircleDot className="h-4 w-4" />}{availabilityLabel[av]}
                 </div>
-                <div className="mt-1 text-lg font-extrabold">{money(p.priceMin)} - {money(p.priceMax)}</div>
-                <div className="text-sm text-ink-soft">Propuesta: <b className="text-brand">{money(a.price)}</b> · {timeAgo(a.at)}</div>
+                <div className="mt-2 text-2xl font-extrabold text-brand">{money(a.price)}</div>
+                <div className="text-xs text-ink-soft">Propuesta enviada {timeAgo(a.at).toLowerCase()}</div>
               </div>
             </div>
-            <Button variant="soft" className="mt-4 w-full text-lg" onClick={() => navigate(`/proveedor/${p.id}?sol=${r.id}`)}>Ver perfil</Button>
-          </div>
-        ))}
-        {r.status === "buscando" && Array.from({ length: Math.max(0, pending) }).map((_, i) => (
-          <div key={"pending" + i} className="card flex animate-pulse items-center gap-4 p-5">
-            <div className="h-24 w-24 rounded-full bg-brand-50" />
-            <div className="flex-1 space-y-3"><div className="h-4 w-2/3 rounded bg-brand-50" /><div className="h-3 w-1/2 rounded bg-brand-50" /><div className="text-sm font-semibold text-brand">Esperando respuesta…</div></div>
+            {a.note && <p className="mt-3 rounded-2xl bg-surface p-3 text-sm text-ink-soft">“{a.note}”</p>}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="soft" onClick={() => navigate(`/proveedor/${p.id}?sol=${r.id}`)}>Ver perfil</Button>
+              {r.status === "buscando" ? <Button onClick={() => navigate(`/acuerdo/${r.id}/${p.id}`)}>Elegir</Button> : <span />}
+            </div>
           </div>
         ))}
       </div>
-      {rows.length === 0 && pending === 0 && (
-        <Empty icon={LuUsers} title="Aún no hay postulaciones" text={r.matched.length ? "Notificamos a los proveedores compatibles. Te avisaremos cuando acepten." : "No encontramos proveedores compatibles en tu zona para esta categoría."} />
+      {rows.length === 0 && (
+        <Empty icon={LuUsers} title="Aún no hay postulaciones" text={r.matchedCount ? `Notificamos a ${r.matchedCount} proveedor${r.matchedCount > 1 ? "es" : ""} compatible${r.matchedCount > 1 ? "s" : ""}. Te avisaremos cuando alguno se postule.` : "Todavía no hay proveedores registrados en tu zona para esta subcategoría."} />
       )}
     </AppShell>
   );
@@ -660,7 +669,7 @@ export function CompatibleProviders({ id }: { id: string }) {
 //  Perfil del proveedor / Selección del proveedor
 // =====================================================================
 export function ProviderProfile({ id }: { id: string }) {
-  const { getProvider, loadProvider, findRequest, openConversation, toast, mode, myProvider, account } = useStore();
+  const { getProvider, loadProvider, findRequest, openConversation, toast, mode, myProvider, zona } = useStore();
   const sol = query().get("sol");
   const r = sol ? findRequest(sol) : undefined;
   const [tab, setTab] = useState<"info" | "portafolio" | "resenas">(r ? "portafolio" : "info");
@@ -675,8 +684,9 @@ export function ProviderProfile({ id }: { id: string }) {
   const p = full ?? getProvider(id);
   if (!p) return <AppShell>{state === "cargando" ? <div className="card mx-auto h-64 max-w-3xl animate-pulse" /> : <Empty icon={LuUserRound} title="Proveedor no encontrado" />}</AppShell>;
   const av = p.availability ?? availability(p.schedule);
-  const ref = r?.location ?? null;
-  const d = ref ? distanceKm(ref, p) : null;
+  const app = r?.applicants.find((a) => a.providerId === p.id);
+  const ref = r?.location ?? (zona?.fuente === "gps" ? { lat: zona.lat!, lng: zona.lng! } : null);
+  const d = app?.distanceKm ?? (ref ? distanceKm(ref, p) : null);
   const reviews = p.resenas ?? [];
   const isMe = myProvider?.id === p.id;
 
@@ -734,15 +744,22 @@ export function ProviderProfile({ id }: { id: string }) {
   return (
     <AppShell hideNav>
       <PageHeader title={r ? "Selección del proveedor" : <span className="flex items-center gap-2"><img src="img/logo.png" alt="" className="h-9 w-9" />Conecta<span className="-ml-2 text-brand-blue">+</span><span className="-ml-2 text-brand-gradient">PRO</span></span>} back={r ? "/proveedores/" + r.id : "/explorar"}
-        right={<button onClick={() => toast("Perfil compartido / reportado (simulado)")} className="rounded-full p-2 hover:bg-white" aria-label="Más opciones"><LuEllipsisVertical className="h-6 w-6" /></button>} />
+        right={<button onClick={async () => {
+          const url = location.href.split("?")[0].replace(/#.*/, "") + "#/proveedor/" + p.id;
+          try {
+            if ((navigator as any).share) await (navigator as any).share({ title: p.name + " en ConectaPRO", url });
+            else { await navigator.clipboard.writeText(url); toast("Enlace del perfil copiado"); }
+          } catch { /* el usuario canceló */ }
+        }} className="rounded-full p-2 hover:bg-white" aria-label="Compartir perfil"><LuEllipsisVertical className="h-6 w-6" /></button>} />
       <div className="grid gap-8 lg:grid-cols-[360px_1fr]">
         <div className="text-center lg:card lg:self-start lg:p-8">
           <Avatar name={p.name} photo={p.photo} size={176} verified={p.verified} className="mx-auto" />
           <h1 className="mt-3 text-3xl font-extrabold tracking-tight">{p.name}</h1>
+          {p.test && <TestBadge className="mt-1" />}
           <div className="mt-1"><Rating value={p.rating} count={p.reviews} className="text-lg" /> <span className="text-ink-soft">reseñas</span></div>
           {p.verified && <Badge tone="ok" icon={LuCircleCheck} className="mt-2 px-4 py-1.5 text-base">Verificado</Badge>}
           <div className="mt-3 flex flex-wrap justify-center gap-2">
-            <Badge tone="brand" icon={LuMapPin} className="px-4 py-2 text-base">{d != null ? `A ${d.toFixed(1)} km` : p.city.split(",")[0]}</Badge>
+            <Badge tone="brand" icon={LuMapPin} className="px-4 py-2 text-base">{d != null ? `${app ? "A" : "≈"} ${d.toFixed(1)} km` : p.city.split(",")[0]}</Badge>
             <Badge tone={av === "otro" ? "warn" : "ok"} icon={LuCircleDot} className="px-4 py-2 text-base">{availabilityLabel[av]}</Badge>
           </div>
           <div className="mt-6 hidden gap-3 lg:grid">
@@ -782,7 +799,7 @@ export function ProviderProfile({ id }: { id: string }) {
       )}
 
       <Modal open={phone} onClose={() => setPhone(false)} title={`Llamar a ${p.name.split(" ")[0]}`}>
-        <p className="text-ink-soft">Por tu seguridad, la llamada se realiza a través de un número enmascarado de ConectaPRO.</p>
+        <p className="text-ink-soft">Llamarás al número que el proveedor registró en ConectaPRO desde el teléfono de tu dispositivo. Te recomendamos acordar los detalles por el chat para que quede registro.</p>
         <div className="mt-4 rounded-2xl bg-surface p-4 text-center text-2xl font-extrabold tracking-wide">+57 {p.phone.replace(/\d{4}$/, "••••")}</div>
         <a href={"tel:+57" + p.phone.replace(/\s/g, "")} className="mt-4 block"><Button className="w-full" icon={LuPhone}>Llamar ahora</Button></a>
       </Modal>
@@ -802,10 +819,14 @@ export function AgreementFlow({ rid, pid }: { rid: string; pid: string }) {
   const [step, setStep] = useState(0);
   const [day, setDay] = useState(0);
   const [time, setTime] = useState("15:00");
-  const [accept, setAccept] = useState(true);
+  const [accept, setAccept] = useState(false);   // nunca premarcada
   const [contract, setContract] = useState(false);
   if (!r || !p) return <NotFoundReq />;
-  const price = app?.price ?? Math.round((p.priceMin + p.priceMax) / 2);
+  if (!app) return (
+    <AppShell hideNav><Empty icon={LuUsers} title="Este proveedor no se ha postulado" text="Solo puedes contratar a proveedores que enviaron una propuesta a tu solicitud."
+      action={<Button onClick={() => navigate("/proveedores/" + r.id)}>Ver ofertas recibidas</Button>} /></AppShell>
+  );
+  const price = app.price;
   const date = localISO(Date.now() + day * 86400000);
   const slots = Array.from({ length: Math.max(0, Math.min(p.schedule.to, 23) - p.schedule.from) }, (_, i) => p.schedule.from + i)
     .filter((h) => day > 0 || h > new Date().getHours())
@@ -872,7 +893,7 @@ export function AgreementFlow({ rid, pid }: { rid: string; pid: string }) {
               <>
                 <label className="mt-4 flex cursor-pointer items-center gap-4 rounded-2xl bg-surface p-4">
                   <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} className="h-7 w-7 shrink-0 accent-brand" />
-                  <span className="text-ink-soft">Acepto los <button type="button" className="font-semibold text-brand underline" onClick={() => setContract(true)}>términos del servicio</button> y confirmo la contratación.</span>
+                  <span className="text-ink-soft">Leí el <button type="button" className="font-semibold text-brand underline" onClick={() => setContract(true)}>contrato digital</button> y confirmo la contratación con {p.name.split(" ")[0]} por {money(price)}.</span>
                 </label>
                 <Button className="mt-5 w-full py-4 text-lg" disabled={!accept || busy} onClick={() => wrap(async () => { await confirmAgreement(r.id, p.id, date, time, price); setStep(2); })}>{busy ? "Guardando acuerdo…" : "Confirmar acuerdo"}</Button>
                 <button onClick={() => setStep(0)} className="mt-3 w-full text-sm font-semibold text-ink-soft">Cambiar fecha u hora</button>
@@ -1058,7 +1079,7 @@ export function RequestDetail({ id }: { id: string }) {
             <Info icon={LuLocateFixed} k="Punto para el emparejamiento" v={r.gps ? `GPS exacto (±${r.gpsPrecision ?? "?"} m)` : "Centro del municipio"} />
             <Info icon={LuCreditCard} k="Método de pago" v={PAYMENTS[r.payment]} />
             <Info icon={LuCalendarDays} k="Publicada" v={`${shortDate(r.createdAt)} · ${clock(r.createdAt)}`} />
-            <Info icon={LuUsers} k="Proveedores notificados" v={`${r.matched.length} compatibles`} />
+            <Info icon={LuUsers} k="Proveedores notificados" v={`${r.matchedCount} compatibles`} />
             {r.agreement && <Info icon={LuClock} k="Fecha pactada" v={agreementWhen(r.agreement.date, r.agreement.time) + (r.agreement.extendedDays ? ` (+${r.agreement.extendedDays} días)` : "")} />}
             {r.agreement && <Info icon={LuCircleDollarSign} k="Costo acordado" v={money(r.agreement.price)} />}
           </dl>
@@ -1087,7 +1108,7 @@ export function RequestDetail({ id }: { id: string }) {
             {r.status === "buscando" && (
               <>
                 <div className="font-bold">{visibleApplicants(r).length} postulaciones recibidas</div>
-                <Button className="w-full" onClick={() => navigate("/proveedores/" + r.id)}>Ver proveedores compatibles</Button>
+                <Button className="w-full" onClick={() => navigate("/proveedores/" + r.id)}>Ver y comparar ofertas</Button>
                 <Button variant="outline" className="w-full" onClick={() => setEdit(true)}>Editar solicitud</Button>
                 <Button variant="danger" className="w-full" disabled={busy} onClick={() => wrap(async () => { await cancelRequest(r.id, false); toast("Solicitud cancelada"); })}>Cancelar solicitud</Button>
               </>

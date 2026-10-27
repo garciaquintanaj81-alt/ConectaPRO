@@ -8,7 +8,8 @@ import {
 import { AppShell } from "../Layout";
 import { useStore } from "../store";
 import { Link, goBack, navigate } from "../router";
-import { Avatar, Badge, Button, Chip, Empty, Field, Modal, PageHeader, Toggle, clock, cx, inputCls, timeAgo, SERVICE_ICON } from "../ui";
+import { Avatar, Badge, Button, Chip, Empty, Field, Modal, PageHeader, TestBadge, Toggle, clock, cx, inputCls, timeAgo, SERVICE_ICON } from "../ui";
+import { LuFlaskConical, LuScale, LuImageOff } from "react-icons/lu";
 import { CATEGORIES, PAYMENTS, PaymentMethod, SERVICES, ServiceId, serviceById } from "../data";
 import { UbicacionSelect } from "../geo";
 import { useBusy } from "../store";
@@ -35,9 +36,9 @@ export function Messages({ activeId }: { activeId?: string }) {
         const last = c.messages.at(-1);
         return (
           <Link key={c.id} to={"/chat/" + c.id} className={cx("flex items-center gap-3 rounded-2xl p-3 transition", c.id === activeId ? "bg-brand-50" : "hover:bg-white")}>
-            <Avatar name={c.peerName} photo={c.peerPhoto} size={54} dot="on" />
+            <Avatar name={c.peerName} photo={c.peerPhoto} size={54} />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2"><span className="truncate font-bold">{c.peerName}</span><span className="shrink-0 text-xs text-ink-soft">{last ? clock(last.at) : ""}</span></div>
+              <div className="flex items-center justify-between gap-2"><span className="flex min-w-0 items-center gap-1.5 truncate font-bold">{c.peerName}{c.peerTest && <TestBadge />}</span><span className="shrink-0 text-xs text-ink-soft">{last ? clock(last.at) : ""}</span></div>
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-sm text-ink-soft">{last ? (last.image ? "📷 Foto" : last.text) : c.peerRole}</span>
                 {c.unread > 0 && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand px-1.5 text-[11px] font-bold text-white">{c.unread}</span>}
@@ -46,7 +47,7 @@ export function Messages({ activeId }: { activeId?: string }) {
           </Link>
         );
       })}
-      {sorted.length === 0 && <p className="p-6 text-center text-ink-soft">No hay conversaciones.</p>}
+      {sorted.length === 0 && <p className="p-6 text-center text-ink-soft">Todavía no tienes conversaciones. Aparecerán aquí cuando escribas a un proveedor o cliente.</p>}
     </div>
   );
 
@@ -100,8 +101,8 @@ function ChatPanel({ convId }: { convId: string }) {
       <header className="flex items-center gap-3 bg-white/80 px-4 py-3 backdrop-blur sm:px-6 lg:border-b lg:border-line">
         <button onClick={() => goBack("/mensajes")} className="rounded-full p-1.5 hover:bg-surface lg:hidden" aria-label="Volver"><LuArrowLeft className="h-7 w-7" /></button>
         <Link to={provider ? "/proveedor/" + provider.id : "#"} className="flex min-w-0 flex-1 items-center gap-3">
-          <Avatar name={c.peerName} photo={c.peerPhoto} size={52} dot="on" />
-          <div className="min-w-0"><div className="truncate text-lg font-extrabold">{c.peerName}</div><div className="text-sm text-ink-soft">{c.peerRole}</div></div>
+          <Avatar name={c.peerName} photo={c.peerPhoto} size={52} />
+          <div className="min-w-0"><div className="flex items-center gap-2 truncate text-lg font-extrabold">{c.peerName}{c.peerTest && <TestBadge />}</div><div className="text-sm text-ink-soft">{c.peerRole}</div></div>
         </Link>
         <button onClick={() => toast("Las llamadas por la app estarán disponibles próximamente")} className="rounded-full p-2.5 text-brand-blue hover:bg-brand-50" aria-label="Llamar"><LuPhone className="h-6 w-6 fill-brand-blue" /></button>
         <button onClick={() => toast("Las videollamadas estarán disponibles próximamente")} className="rounded-full p-2.5 text-brand hover:bg-brand-50" aria-label="Videollamada"><LuVideo className="h-7 w-7 fill-brand" /></button>
@@ -194,8 +195,9 @@ export function Profile() {
           <Avatar name={account.name} photo={account.photo} size={180} className="mx-auto" />
           <h1 className="mt-4 text-3xl font-extrabold tracking-tight">{account.name}</h1>
           <div className="text-xl text-ink-soft">{mode === "cliente" ? "Cliente" : "Proveedor"}</div>
-          <div className="mt-4 flex justify-center gap-2">
-            <Badge tone="ok" icon={LuBadgeCheck}>Identidad verificada</Badge>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {account.verified ? <Badge tone="ok" icon={LuBadgeCheck}>Rostro validado al registrarse</Badge> : <Badge tone="soft">Sin validación facial</Badge>}
+            {account.test && <TestBadge />}
           </div>
           <div className="mt-5 grid grid-cols-2 gap-3">
             <Link to="/perfil/beneficios" className="rounded-2xl bg-[#fff6e5] p-3"><div className="text-2xl font-extrabold text-[#9a5b00]">{points}</div><div className="text-xs font-semibold text-[#9a5b00]">Puntos</div></Link>
@@ -255,39 +257,94 @@ export function ProfileSection({ section }: { section: string }) {
 
 function PersonalInfo() {
   const { account, updateAccount, toast } = useStore();
-  const [f, setF] = useState({ name: account!.name, phone: account!.phone, photo: account!.photo ?? "" });
+  const [f, setF] = useState({ name: account!.name, phone: account!.phone });
   const [ubic, setUbic] = useState({ departamento: account!.departamento ?? "", municipio: account!.municipio ?? "" });
   const [busy, wrap] = useBusy();
-  const file = useRef<HTMLInputElement>(null);
   const save = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ubic.municipio) return toast("Selecciona tu departamento y municipio");
     wrap(async () => {
-      await updateAccount({ name: f.name, phone: f.phone.replace(/\D/g, ""), photo: f.photo || undefined, ...ubic } as any);
+      await updateAccount({ name: f.name, phone: f.phone.replace(/\D/g, ""), ...ubic } as any);
       toast("Datos guardados");
     });
   };
   return (
-    <form className="card space-y-4 p-6" onSubmit={save}>
-      <div className="flex items-center gap-4">
-        <Avatar name={f.name} photo={f.photo || undefined} size={80} />
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="soft" className="px-4 py-2.5 text-sm" onClick={() => file.current?.click()}>Cambiar foto</Button>
-          {f.photo && <Button type="button" variant="ghost" className="px-3 py-2.5 text-sm" onClick={() => setF({ ...f, photo: "" })}>Quitar</Button>}
-        </div>
-        <input ref={file} type="file" accept="image/*" hidden onChange={async (e) => {
-          const fl = e.target.files?.[0]; if (!fl) return;
-          setF({ ...f, photo: await toDataUrl(fl, 320) }); e.target.value = "";
-        }} />
-      </div>
-      <Field label="Nombre completo"><input name="nombre" className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-      <Field label="Documento (no editable)"><input className={cx(inputCls, "text-ink-soft")} value={account!.document} readOnly /></Field>
-      <Field label="Correo electrónico (no editable)"><input className={cx(inputCls, "text-ink-soft")} value={account!.email} readOnly /></Field>
-      <Field label="Celular"><input name="celular" inputMode="numeric" className={inputCls} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
-      <UbicacionSelect value={ubic} onChange={setUbic} />
-      <Button type="submit" disabled={busy} className="w-full">{busy ? "Guardando…" : "Guardar cambios"}</Button>
-    </form>
+    <div className="space-y-4">
+      <ProfilePhoto />
+      <form className="card space-y-4 p-6" onSubmit={save}>
+        <Field label="Nombre completo"><input name="nombre" className={inputCls} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+        <Field label="Documento (no editable)"><input className={cx(inputCls, "text-ink-soft")} value={account!.document} readOnly /></Field>
+        <Field label="Correo electrónico (no editable)"><input className={cx(inputCls, "text-ink-soft")} value={account!.email} readOnly /></Field>
+        <Field label="Celular"><input name="celular" inputMode="numeric" className={inputCls} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
+        <UbicacionSelect value={ubic} onChange={setUbic} />
+        <Button type="submit" disabled={busy} className="w-full">{busy ? "Guardando…" : "Guardar cambios"}</Button>
+      </form>
+    </div>
   );
+}
+
+/** Foto de perfil guardada en Supabase Storage: subir, cambiar, eliminar y elegir quién la ve */
+function ProfilePhoto() {
+  const { account, uploadPhoto, deletePhoto, setPhotoPrivacy, toast } = useStore();
+  const [busy, wrap] = useBusy();
+  const [confirm, setConfirm] = useState(false);
+  const file = useRef<HTMLInputElement>(null);
+  if (!account) return null;
+  const has = !!account.photo;
+  const pick = (fl: File) => wrap(async () => {
+    if (!/^image\//.test(fl.type)) { toast("Elige un archivo de imagen"); return; }
+    if (fl.size > 15 * 1024 * 1024) { toast("La imagen es demasiado grande (máximo 15 MB antes de reducirla)"); return; }
+    const blob = await toJpegBlob(fl, 512);
+    await uploadPhoto(blob);
+    toast(has ? "Foto actualizada" : "Foto guardada");
+  });
+  return (
+    <div className="card p-6">
+      <div className="flex flex-col items-center gap-4 sm:flex-row">
+        <Avatar name={account.name} photo={account.photo} size={96} />
+        <div className="min-w-0 flex-1 text-center sm:text-left">
+          <div className="font-bold">Foto de perfil</div>
+          <p className="text-sm text-ink-soft">{has ? (account.photoStored ? "Guardada en el almacenamiento de ConectaPRO." : "Foto anterior. Súbela de nuevo para guardarla en el almacenamiento.") : "Aún no tienes foto. JPG, PNG o WEBP."}</p>
+          <div className="mt-3 flex flex-wrap justify-center gap-2 sm:justify-start">
+            <Button type="button" variant="soft" className="px-4 py-2.5 text-sm" disabled={busy} onClick={() => file.current?.click()}>{busy ? "Guardando…" : has ? "Cambiar foto" : "Subir foto"}</Button>
+            {has && <Button type="button" variant="ghost" icon={LuImageOff} className="px-3 py-2.5 text-sm text-bad" disabled={busy} onClick={() => setConfirm(true)}>Eliminar</Button>}
+          </div>
+        </div>
+        <input ref={file} type="file" accept="image/jpeg,image/png,image/webp" hidden data-testid="foto-perfil" onChange={(e) => { const fl = e.target.files?.[0]; if (fl) pick(fl); e.target.value = ""; }} />
+      </div>
+      <label className="mt-5 block text-sm font-semibold">¿Quién puede ver tu foto?
+        <select value={account.photoPrivacy ?? "todos"} disabled={busy} onChange={(e) => wrap(async () => { await setPhotoPrivacy(e.target.value as any); toast("Privacidad de la foto actualizada"); })}
+          className="mt-1 w-full rounded-xl bg-surface px-4 py-3 font-normal outline-none ring-1 ring-line">
+          <option value="todos">Todos los usuarios de ConectaPRO</option>
+          <option value="contactos">Solo personas con las que tengo chat, postulación o acuerdo</option>
+        </select>
+      </label>
+      <Modal open={confirm} onClose={() => setConfirm(false)} title="¿Eliminar tu foto de perfil?">
+        <p className="text-ink-soft">Se borrará del almacenamiento y dejará de mostrarse a los demás usuarios.</p>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <Button variant="outline" onClick={() => setConfirm(false)}>Cancelar</Button>
+          <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await deletePhoto(); setConfirm(false); toast("Foto eliminada"); })}>Eliminar</Button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/** Reduce la imagen (lado mayor = max px) y la convierte a JPEG para subirla */
+function toJpegBlob(file: File, max = 512): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("No pudimos leer la imagen")); };
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement("canvas"); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext("2d")!.drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob((b) => (b ? resolve(b) : reject(new Error("No pudimos procesar la imagen"))), "image/jpeg", 0.85);
+    };
+    img.src = url;
+  });
 }
 
 /** Convierte una imagen a JPEG reducido (para guardarla en la base de datos) */
@@ -385,7 +442,7 @@ function Addresses() {
 }
 
 function Security() {
-  const { strikes, account, resetDemo, deleteAccount, toast } = useStore();
+  const { strikes, account, resetDemo, resetTests, deleteAccount, toast, terms } = useStore();
   const [confirm, setConfirm] = useState(false);
   const [busy, wrap] = useBusy();
   return (
@@ -399,10 +456,18 @@ function Security() {
         <p className="mt-2 text-sm text-ink-soft">Una falta grave es no realizar un trabajo acordado (proveedor) o cancelar un acuerdo confirmado (cliente). Al acumular tres, la cuenta queda suspendida para proteger la confianza de la comunidad.</p>
       </div>
       <div className="card space-y-3 p-6">
-        <div className="flex items-center gap-3"><LuBadgeCheck className="h-6 w-6 text-ok" /><div><div className="font-bold">Identidad verificada</div><div className="text-sm text-ink-soft">Validación facial realizada al registrarte</div></div></div>
+        <div className="flex items-center gap-3"><LuBadgeCheck className={cx("h-6 w-6", account?.verified ? "text-ok" : "text-ink-soft")} /><div><div className="font-bold">{account?.verified ? "Validación facial realizada" : "Sin validación facial"}</div><div className="text-sm text-ink-soft">{account?.verified ? "Se detectó un rostro frente a la cámara al registrarte" : "Esta cuenta no pasó por la validación facial"}</div></div></div>
+        <Link to="/legal" className="flex items-center gap-3"><LuScale className="h-6 w-6 text-brand" /><div className="flex-1"><div className="font-bold">Términos, condiciones y aviso de privacidad</div><div className="text-sm text-ink-soft">{terms?.fecha ? `Aceptaste la versión ${terms.version} el ${new Date(terms.fecha).toLocaleDateString("es-CO")}` : `Versión vigente ${terms?.version ?? ""}`}</div></div><LuChevronRight className="h-5 w-5" /></Link>
         <div className="flex items-center gap-3"><LuShieldCheck className="h-6 w-6 text-brand" /><div><div className="font-bold">Habeas Data</div><div className="text-sm text-ink-soft">Tus datos se tratan conforme a la Ley 1581 de 2012</div></div></div>
         <Button variant="outline" className="w-full" onClick={() => toast("Escribe a soporte@conectapro.co para cambiar tu contraseña")}>Cambiar contraseña</Button>
       </div>
+      {account?.test && (
+        <div className="card p-6">
+          <div className="flex items-center gap-2 font-bold"><LuFlaskConical className="h-5 w-5 text-[#b45309]" /> Cuenta de prueba</div>
+          <p className="mt-1 text-sm text-ink-soft">Borra las solicitudes, postulaciones, acuerdos, chats y notificaciones de las 4 cuentas de prueba para repetir el escenario desde cero. Los usuarios reales no se ven afectados.</p>
+          <Button variant="soft" icon={LuRefreshCw} disabled={busy} className="mt-4 w-full" onClick={() => wrap(async () => { await resetTests(); toast("Escenario de prueba reiniciado"); })}>Reiniciar escenario de prueba</Button>
+        </div>
+      )}
       {account?.demo && (
         <div className="card p-6">
           <div className="font-bold">Datos de ejemplo</div>
@@ -441,16 +506,15 @@ function Benefits() {
         {next && <><div className="mt-4 h-2 rounded-full bg-white/30"><div className="h-2 rounded-full bg-white" style={{ width: `${(points / next) * 100}%` }} /></div><div className="mt-1 text-sm opacity-90">Te faltan {next - points} puntos para el siguiente nivel</div></>}
         <p className="mt-4 text-sm opacity-90">Ganas puntos al calificar, cumplir tus acuerdos y mantener buena reputación.</p>
       </div>
-      <h2 className="pt-2 text-xl font-extrabold">Beneficios con marcas aliadas</h2>
+      <h2 className="pt-2 text-xl font-extrabold">Beneficios con marcas aliadas (en gestión)</h2>
       {allies.map((a) => (
         <div key={a.id} className="card flex items-center gap-4 p-4">
           <span className={cx("flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-lg font-extrabold", a.color)}>{a.brand[0]}</span>
           <div className="flex-1"><div className="font-bold">{a.brand}</div><div className="text-sm text-ink-soft">{a.offer}</div></div>
-          <Button variant={points >= a.cost ? "primary" : "soft"} disabled={points < a.cost || busy} className="px-4 py-2.5 text-sm" icon={LuTicket}
-            onClick={() => wrap(async () => { const r = await redeem(a.id); toast(`¡Cupón de ${r.brand} redimido! Código: ${r.code}`); })}>{a.cost}</Button>
+          <span className="flex shrink-0 flex-col items-end text-sm"><b className="inline-flex items-center gap-1"><LuTicket className="h-4 w-4" />{a.cost} pts</b><span className="text-xs text-ink-soft">Próximamente</span></span>
         </div>
       ))}
-      <p className="text-center text-xs text-ink-soft">Marcas mostradas solo como ejemplo de posibles convenios.</p>
+      <p className="text-center text-xs text-ink-soft">Convenios propuestos, aún no firmados: los canjes se habilitarán cuando existan acuerdos reales con las marcas. Tus puntos se conservan.</p>
     </div>
   );
 }

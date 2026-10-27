@@ -136,6 +136,7 @@ SERVICIOS = [
     ("musica_dj", "Música y DJ", "DJ", "eventos", None, "dj sonido musica fiesta"),
     ("catering", "Catering y meseros", "Catering", "eventos", None, "comida evento meseros banquete"),
     ("animacion_infantil", "Animación infantil", "Animación", "eventos", None, "recreacion niños payaso fiesta infantil"),
+    ("desayunos_sorpresa", "Desayunos y detalles sorpresa", "Desayunos sorpresa", "eventos", None, "desayuno sorpresa detalle regalo cumpleaños aniversario ancheta"),
     ("cuidado_ninos", "Cuidado de niños", "Niñera", "mas", None, "niñera cuidar niños bebe"),
     ("adulto_mayor", "Acompañamiento adulto mayor", "Adulto mayor", "mas", None, "acompañante abuelo cuidado"),
     ("mandados", "Mandados y diligencias", "Mandados", "mas", None, "diligencia mandado tramite fila"),
@@ -332,6 +333,8 @@ w("insert into municipios (codigo, departamento, nombre, lat, lng) values\n" + "
   "\non conflict (codigo) do update set departamento = excluded.departamento, nombre = excluded.nombre, lat = excluded.lat, lng = excluded.lng;\n")
 w("insert into categorias (id, nombre, corto, descripcion, orden) values\n" + ",\n".join(f"({q(i)},{q(n)},{q(c)},{q(d)},{k})" for k, (i, n, c, d) in enumerate(CATEGORIAS)) +
   "\non conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, descripcion = excluded.descripcion, orden = excluded.orden;\n")
+# Sectores principales: los tres que se muestran primero (el resto con "Ver más")
+w("update categorias set principal = (id in ('hogar', 'belleza', 'eventos'));\n")
 w("insert into servicios (id, nombre, corto, categoria, foto, palabras, orden) values\n" + ",\n".join(
     f"({q(i)},{q(n)},{q(c)},{q(cat)},{q(f)},{q(pal)},{k})" for k, (i, n, c, cat, f, pal) in enumerate(SERVICIOS)) +
   "\non conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, categoria = excluded.categoria, foto = excluded.foto, palabras = excluded.palabras, orden = excluded.orden;\n")
@@ -339,7 +342,7 @@ w("insert into aliados (id, marca, oferta, costo, color) values\n" + ",\n".join(
     f"({k+1},{q(m)},{q(o)},{c},{q(col)})" for k, (m, o, c, col) in enumerate(ALIADOS)) +
   "\non conflict (id) do update set marca = excluded.marca, oferta = excluded.oferta, costo = excluded.costo, color = excluded.color;\n")
 w("select setval('aliados_id_seq', (select max(id) from aliados));\n")
-w("insert into config (clave, valor) values ('auto_respuesta_demo','true'),"
+w("insert into config (clave, valor) values "
   "('demo_login_1','daniela@conectapro.co'),('demo_login_2','carlos@conectapro.co'),"
   "('demo_login_3','juan@conectapro.co'),('demo_login_4','andres@conectapro.co') on conflict (clave) do update set valor = excluded.valor;\n")
 

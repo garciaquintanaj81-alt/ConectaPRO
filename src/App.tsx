@@ -12,6 +12,7 @@ import { Barter, Messages, Notifications, Profile, ProfileSection } from "./scre
 import { AppShell } from "./Layout";
 import { useEffect, useRef, useState } from "react";
 import { Simulator } from "./screens/Simulator";
+import { LegalPage, TermsGate, TestAccounts } from "./screens/Legal";
 import type { Notification } from "./store";
 import { LuBell } from "react-icons/lu";
 
@@ -19,9 +20,9 @@ type Route = [string, (p: Record<string, string>) => JSX.Element];
 
 export default function App() {
   const path = useRoute();
-  const { session, mode, strikes, toastMsg, resetDemo, logout, phase, bootError, account } = useStore();
+  const { session, mode, strikes, toastMsg, resetDemo, logout, phase, bootError, account, terms } = useStore();
   const logged = !!session;
-  const isPublic = path === "/" || path === "/login" || path === "/registro" || path === "/simulador";
+  const isPublic = path === "/" || path === "/login" || path === "/registro" || path === "/simulador" || path === "/legal" || path === "/pruebas";
 
   // El simulador le pide a esta pantalla reiniciar los datos de ejemplo
   useEffect(() => {
@@ -36,7 +37,7 @@ export default function App() {
   useEffect(() => {
     if (phase !== "listo") return;
     if (!logged && !isPublic) navigate("/", true);
-    if (logged && (path === "/" || path === "/login")) navigate("/inicio", true);
+    if (logged && (path === "/" || path === "/login" || path === "/terminos")) navigate("/inicio", true);
   }, [logged, path, phase]);
 
   if (phase === "cargando") return <Splash />;
@@ -46,6 +47,8 @@ export default function App() {
   const routes: Route[] = [
     ["/", () => <Welcome />],
     ["/simulador", () => <Simulator />],
+    ["/legal", () => <LegalPage />],
+    ["/pruebas", () => <TestAccounts />],
     ["/login", () => <Login />],
     ["/registro", () => <Register />],
     ["/rol", () => <RoleSelect />],
@@ -77,7 +80,10 @@ export default function App() {
   ];
 
   let page: JSX.Element | null = null;
+  // Cuentas que aún no aceptan la versión vigente de los términos: primero la pantalla de aceptación
+  const needsTerms = logged && terms && !terms.aceptada && path !== "/legal" && path !== "/pruebas" && path !== "/simulador";
   if (!logged && !isPublic) page = null;
+  else if (needsTerms) page = <TermsGate />;
   else if (logged && strikes >= 3 && !path.startsWith("/perfil")) {
     page = (
       <AppShell hideNav>

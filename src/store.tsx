@@ -8,13 +8,14 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import {
-  Account, Address, ClientInfo, DEMO_PASSWORD, PaymentMethod, PayMethod, Provider, ServiceId, setCatalog,
+  Account, Address, ClientInfo, DEMO_PASSWORD, PaymentMethod, PayMethod, Provider, ServiceId, TEST_PASSWORD, setCatalog,
 } from "./data";
+import { TERMS_VERSION } from "./legal";
 
 export type Mode = "cliente" | "proveedor";
 export type Status = "buscando" | "en_curso" | "completada" | "cancelada";
 
-export interface Applicant { providerId: string; price: number; at: number; note?: string }
+export interface Applicant { providerId: string; price: number; at: number; note?: string; distanceKm?: number }
 export interface Agreement { date: string; time: string; price: number; code: string; signedAt: number; extendedDays?: number }
 export interface Rating { stars: number; comment: string; at: number }
 export interface Trace { total: number; byCategory: number; byCoverage: number; bySchedule: number }
@@ -26,17 +27,20 @@ export interface Request {
   title: string;
   desc: string;
   service: ServiceId;
-  location: { lat: number; lng: number; label: string };
+  /** approximate = punto redondeado (~1 km) y sin dirección: lo ven los proveedores no contratados */
+  location: { lat: number; lng: number; label: string; approximate?: boolean };
   departamento: string;
   municipio: string;
   municipioNombre: string;
   departamentoNombre: string;
-  direccion: string;
+  direccion: string | null;
   payment: PaymentMethod;
   wantsProposals: boolean;
   createdAt: number;
   status: Status;
   matched: string[];
+  matchedCount: number;
+  applicantsCount: number;
   applicants: Applicant[];
   declinedBy: string[];
   providerId?: string;
@@ -52,12 +56,27 @@ export interface Request {
 }
 
 export interface Message { id: string; from: "me" | "peer" | "system"; text?: string; image?: string; at: number }
-export interface Conversation { id: string; peerKey: string; peerUserId: string; peerName: string; peerPhoto?: string; peerRole: string; messages: Message[]; unread: number }
+export interface Conversation { id: string; peerKey: string; peerUserId: string; peerName: string; peerPhoto?: string; peerTest?: boolean; peerRole: string; messages: Message[]; unread: number }
 export interface Notification { id: string; text: string; at: number; read: boolean; link?: string; kind: "match" | "agreement" | "rating" | "ia" | "info" | "strike" | "message" }
 export interface Barter { id: string; offers: ServiceId; needs: ServiceId; note: string }
 
+export interface TermsState { version: string; aceptada: boolean; fecha?: number | null }
+
+/** Zona desde la que se buscan servicios: municipio del perfil, uno elegido a mano o la ubicación actual (GPS) */
+export interface Zona {
+  departamento: string;
+  municipio: string;
+  label: string;
+  fuente: "perfil" | "manual" | "gps";
+  lat?: number;
+  lng?: number;
+  accuracy?: number;
+  at?: number;
+}
+
 interface ServerState {
   cuenta: Account;
+  terminos: TermsState;
   modo: Mode;
   puntos: number;
   faltas: number;
@@ -126,6 +145,14 @@ function useStoreValue() {
     })();
   }, []);
 
+  // El catálogo trae conteos de proveedores según la cuenta (real, prueba o simulación):
+  // se vuelve a cargar al iniciar o cerrar sesión
+  const cuentaId = st?.cuenta.id ?? null;
+  useEffect(() => {
+    if (phase !== "listo") return;
+    api.rpc("api_catalogo").then((c) => { setCatalog(c); setTick((x) => x + 1); }).catch(() => null);
+  }, [cuentaId, phase]);
+
   // ---------- Actualización periódica (tiempo real) ----------
   useEffect(() => {
     if (phase !== "listo" || !st) return;
@@ -151,16 +178,88 @@ function useStoreValue() {
     }
   }
 
-  async function loginDemoInternal(email: string) {
-    try { await api.signIn(email, DEMO_PASSWORD); }
+  async function loginDemoInternal(email: string, password = DEMO_PASSWORD) {
+    try { await api.signIn(email, password); }
     catch (e: any) {
       if (!/incorrectos/.test(e.message)) throw e;
-      await api.signUp(email, DEMO_PASSWORD, { demo: true });     // primera vez: crea el acceso de la cuenta de ejemplo
+      await api.signUp(email, password, { cuenta_prevista: true });   // primera vez: crea el acceso de la cuenta ya preparada
     }
-    await api.rpc("api_completar_registro");
+    try { await api.rpc("api_completar_registro"); }
+    catch (e) { await api.signOut(); throw e; }
   }
 
   const account = st?.cuenta ?? null;
+
+  // ---------- Zona de búsqueda (ubicación) ----------
+  const zonaKey = account ? "conectapro-zona-" + account.id : "";
+  const perfilZona = (): Zona | null => account?.municipio
+    ? { departamento: account.departamento ?? "", municipio: account.municipio, label: account.city, fuente: "perfil" }
+    : null;
+  const [zonaSel, setZonaSel] = useState<Zona | null>(null);
+  const [gpsState, setGpsState] = useState<"inactivo" | "pidiendo" | "activo" | "denegado" | "no-disponible" | "error">("inactivo");
+  const watchId = useRef<number | null>(null);
+  const lastMuniCheck = useRef<{ lat: number; lng: number } | null>(null);
+  // Al cambiar de cuenta se recupera la zona elegida a mano (solo municipio; nunca coordenadas GPS)
+  useEffect(() => {
+    stopWatch();
+    if (!zonaKey) { setZonaSel(null); return; }
+    try { const z = JSON.parse(localStorage.getItem(zonaKey) || "null"); setZonaSel(z && z.fuente === "manual" ? z : null); }
+    catch { setZonaSel(null); }
+  }, [zonaKey]);
+  const zona: Zona | null = zonaSel ?? perfilZona();
+
+  function stopWatch() {
+    if (watchId.current != null) { try { navigator.geolocation.clearWatch(watchId.current); } catch { /* */ } }
+    watchId.current = null;
+  }
+  useEffect(() => () => stopWatch(), []);
+
+  /** Pide permiso de ubicación y sigue la posición mientras la app está abierta */
+  async function usarUbicacionActual(): Promise<boolean> {
+    if (!("geolocation" in navigator) || !window.isSecureContext) { setGpsState("no-disponible"); return false; }
+    setGpsState("pidiendo");
+    const pos = await new Promise<GeolocationPosition | null>((res) =>
+      navigator.geolocation.getCurrentPosition(res, (err) => { setGpsState(err.code === err.PERMISSION_DENIED ? "denegado" : "error"); res(null); },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }));
+    if (!pos) return false;
+    const ok = await aplicarPosicion(pos, true);
+    if (!ok) return false;
+    setGpsState("activo");
+    stopWatch();
+    watchId.current = navigator.geolocation.watchPosition((p) => { aplicarPosicion(p, false); }, () => null,
+      { enableHighAccuracy: true, maximumAge: 20000, timeout: 30000 });
+    return true;
+  }
+  async function aplicarPosicion(p: GeolocationPosition, forzar: boolean): Promise<boolean> {
+    const lat = p.coords.latitude, lng = p.coords.longitude, accuracy = Math.round(p.coords.accuracy);
+    const prev = lastMuniCheck.current;
+    // Solo se vuelve a consultar el municipio si la persona se movió más de 2 km
+    if (forzar || !prev || distKm(prev, { lat, lng }) > 2) {
+      try {
+        const m = await api.rpc<{ codigo: string; nombre: string; departamento: string; departamentoNombre: string }>("api_municipio_cercano", { p_lat: lat, p_lng: lng });
+        lastMuniCheck.current = { lat, lng };
+        setZonaSel({ departamento: m.departamento, municipio: m.codigo, label: m.nombre === m.departamentoNombre ? m.nombre : `${m.nombre}, ${m.departamentoNombre}`, fuente: "gps", lat, lng, accuracy, at: Date.now() });
+      } catch { if (forzar) { setGpsState("error"); return false; } }
+    } else {
+      setZonaSel((z) => (z && z.fuente === "gps" ? { ...z, lat, lng, accuracy, at: Date.now() } : z));
+    }
+    return true;
+  }
+  const zonaActions = {
+    usarUbicacionActual,
+    /** Elegir manualmente otra ciudad o municipio */
+    elegirZona(z: { departamento: string; municipio: string; label: string }) {
+      stopWatch(); setGpsState("inactivo");
+      const v: Zona = { ...z, fuente: "manual" };
+      setZonaSel(v);
+      try { localStorage.setItem(zonaKey, JSON.stringify(v)); } catch { /* */ }
+    },
+    /** Volver al municipio registrado en el perfil */
+    zonaDelPerfil() {
+      stopWatch(); setGpsState("inactivo"); setZonaSel(null);
+      try { localStorage.removeItem(zonaKey); } catch { /* */ }
+    },
+  };
   const mode: Mode = st?.modo ?? "cliente";
   const myProvider = st?.proveedor ?? undefined;
   const now = () => Date.now() + clockSkew.current;
@@ -178,8 +277,8 @@ function useStoreValue() {
   const clientInfo = (key: string): ClientInfo => st?.clientes[key] ?? (account && key === account.id ? { name: account.name, photo: account.photo, rating: 5, reviews: 0 } : { name: "Cliente", rating: 5, reviews: 0 });
   const findRequest = (id: string): Request | undefined =>
     st?.solicitudes.find((r) => r.id === id) ?? st?.trabajos.find((r) => r.id === id) ?? st?.oportunidades.find((o) => o.r.id === id)?.r;
-  /** Postulaciones visibles (las respuestas automáticas de ejemplo llegan con unos segundos de diferencia) */
-  const visibleApplicants = (r: Request) => r.applicants.filter((a) => a.at <= now());
+  /** Postulaciones de la solicitud (todas son reales: las envía cada proveedor desde su cuenta) */
+  const visibleApplicants = (r: Request) => r.applicants;
 
   const actions = {
     refresh,
@@ -193,7 +292,12 @@ function useStoreValue() {
       await loginDemoInternal(email);
       await refresh();
     },
-    async register(d: { email: string; password: string; name: string; document: string; phone: string; departamento: string; municipio: string; verification: unknown }) {
+    /** Ingreso a una de las 4 cuentas de prueba (QA) */
+    async loginTest(email: string) {
+      await loginDemoInternal(email, TEST_PASSWORD);
+      await refresh();
+    },
+    async register(d: { email: string; password: string; name: string; document: string; phone: string; departamento: string; municipio: string; verification: unknown; terms: string }) {
       try { await api.signUp(d.email, d.password, { nombre: d.name }); }
       catch (e: any) {
         // Si el acceso ya existía (p. ej. un intento anterior incompleto), se intenta ingresar con esa contraseña
@@ -201,17 +305,39 @@ function useStoreValue() {
         await api.signIn(d.email, d.password).catch(() => { throw e; });
       }
       try {
-        await api.rpc("api_completar_registro", { p_nombre: d.name, p_documento: d.document, p_celular: d.phone, p_departamento: d.departamento, p_municipio: d.municipio, p_verificacion: d.verification });
+        await api.rpc("api_completar_registro", { p_nombre: d.name, p_documento: d.document, p_celular: d.phone, p_departamento: d.departamento, p_municipio: d.municipio,
+          p_verificacion: d.verification, p_terminos: d.terms, p_agente: navigator.userAgent });
       } catch (e) {
         await api.signOut();
         throw e;
       }
       await refresh();
     },
-    async logout() { await api.signOut(); setSt(null); },
+    async logout() { stopWatch(); setGpsState("inactivo"); await api.signOut(); setSt(null); },
+    /** Registra la aceptación de la versión vigente de los términos */
+    acceptTerms: () => run(() => api.rpc("api_aceptar_terminos", { p_version: TERMS_VERSION, p_agente: navigator.userAgent })),
+    /** Sube la foto a Supabase Storage, la asocia a la cuenta y borra la anterior */
+    async uploadPhoto(blob: Blob) {
+      const ruta = await run(() => api.uploadPhoto(blob), { refresh: false });
+      try {
+        const r = await run(() => api.rpc<{ anterior: string | null }>("api_foto_perfil", { p_ruta: ruta }));
+        if (r.anterior && r.anterior !== ruta) api.deletePhotos([r.anterior]).catch(() => null);
+      } catch (e) { api.deletePhotos([ruta]).catch(() => null); throw e; }
+    },
+    async deletePhoto() {
+      const r = await run(() => api.rpc<{ anterior: string | null }>("api_foto_perfil", { p_ruta: null }));
+      if (r.anterior) await api.deletePhotos([r.anterior]).catch(() => null);
+    },
+    setPhotoPrivacy: (v: "todos" | "contactos") => run(() => api.rpc("api_foto_privacidad", { p_valor: v })),
+    resetTests: () => run(() => api.rpc("api_reiniciar_pruebas")),
     setMode: (m: Mode) => run(() => api.rpc("api_set_modo", { p_modo: m })),
     updateAccount: (p: Partial<Account>) => run(() => api.rpc("api_actualizar_perfil", { p_datos: p })),
-    async deleteAccount() { await run(() => api.rpc("api_eliminar_cuenta"), { refresh: false }); await api.signOut(); setSt(null); },
+    async deleteAccount() {
+      // Primero se borra la foto del almacenamiento (los demás datos los borra la base de datos)
+      if (st?.cuenta.photoPath) await api.deletePhotos([st.cuenta.photoPath]).catch(() => null);
+      await run(() => api.rpc("api_eliminar_cuenta"), { refresh: false });
+      await api.signOut(); setSt(null);
+    },
     resetDemo: () => run(() => api.rpc("api_reiniciar_demo")),
 
     // ---------- Proveedor ----------
@@ -261,6 +387,8 @@ function useStoreValue() {
   return {
     phase, bootError, session: st ? { accountId: st.cuenta.id, mode } : null,
     account, mode, myProvider, getProvider, loadProvider, clientInfo, findRequest, visibleApplicants, now,
+    terms: st?.terminos ?? null,
+    zona, gpsState, ...zonaActions,
     myRequests: st?.solicitudes ?? [],
     opportunities: st?.oportunidades ?? [],
     myJobs: st?.trabajos ?? [],
@@ -274,6 +402,12 @@ function useStoreValue() {
     myBarters: st?.misTrueques ?? [],
     toast, toastMsg, run, ...actions,
   };
+}
+
+function distKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6371, rad = (x: number) => (x * Math.PI) / 180;
+  const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {

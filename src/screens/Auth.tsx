@@ -11,6 +11,8 @@ import { rpc } from "../api";
 import { UbicacionSelect } from "../geo";
 import { CHECK_MSG, Check, FrameAnalysis, VerificationResult, createAnalyzer, evaluate, loadDetector } from "../face/detector";
 import { SimulatorLink } from "./Simulator";
+import { LegalConsent } from "./Legal";
+import { TERMS_VERSION } from "../legal";
 
 // ---------------------------------------------------------------------
 //  Marco de las pantallas de acceso: en computador se divide en dos
@@ -110,6 +112,7 @@ export function Welcome() {
             ¿Ya tienes cuenta? <Link to="/login" className="font-bold text-brand-violet">Iniciar sesión</Link>
           </p>
           <SimulatorLink className="mt-2" />
+          <p className="text-center text-sm text-ink-soft"><Link to="/legal" className="font-semibold underline underline-offset-2">Términos, condiciones y privacidad</Link></p>
         </div>
       </div>
     </div>
@@ -120,14 +123,12 @@ export function Welcome() {
 //  Iniciar sesión (con accesos rápidos de demostración)
 // ---------------------------------------------------------------------
 export function Login() {
-  const { login, loginDemo, toast } = useStore();
+  const { login, toast } = useStore();
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [show, setShow] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [demos, setDemos] = useState<{ email: string; name: string; photo?: string; role: string }[]>([]);
-  useEffect(() => { rpc("api_demo_cuentas").then(setDemos).catch(() => setDemos([])); }, []);
 
   const go = async (fn: () => Promise<void>) => {
     setBusy(true); setErr("");
@@ -174,24 +175,8 @@ export function Login() {
         ))}
       </div>
 
-      {demos.length > 0 && (
-        <div className="mt-7 rounded-2xl bg-brand-50/70 p-4">
-          <div className="text-sm font-bold text-brand">Cuentas de demostración</div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {demos.map((a) => (
-              <button key={a.email} disabled={busy} onClick={() => go(() => loginDemo(a.email))} className="flex items-center gap-3 rounded-xl bg-white p-2.5 text-left ring-1 ring-line hover:ring-brand/40 disabled:opacity-60">
-                <Avatar name={a.name} photo={a.photo} size={40} />
-                <div className="leading-tight">
-                  <div className="text-sm font-bold">{a.name.split(" ")[0]}</div>
-                  <div className="text-xs text-ink-soft">{a.role}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <SimulatorLink className="mt-4" />
+      <SimulatorLink className="mt-7" />
+      <p className="mt-3 text-center text-sm text-ink-soft"><Link to="/pruebas" className="font-semibold underline underline-offset-2">Cuentas de prueba (QA)</Link> · <Link to="/legal" className="font-semibold underline underline-offset-2">Términos y privacidad</Link></p>
       <p className="mt-7 text-center text-lg text-ink-soft">¿No tienes una cuenta?<br /><Link to="/registro" className="font-bold text-brand-violet">Registrarme</Link></p>
     </AuthFrame>
   );
@@ -211,6 +196,8 @@ export function Register() {
   const [serverErr, setServerErr] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // Aceptación expresa: las casillas empiezan sin marcar
+  const [consent, setConsent] = useState({ terms: false, privacy: false });
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => { setF({ ...f, [k]: e.target.value }); setErrors({ ...errors, [k]: "" }); };
 
@@ -223,6 +210,7 @@ export function Register() {
     if (f.password.length < 6) e.password = "Mínimo 6 caracteres";
     if (!ubic.departamento) e.departamento = "Selecciona tu departamento";
     if (!ubic.municipio) e.municipio = "Selecciona tu ciudad o municipio";
+    if (!consent.terms || !consent.privacy) e.consent = "Para crear tu cuenta debes aceptar los términos y autorizar el tratamiento de tus datos";
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -232,7 +220,7 @@ export function Register() {
   const finish = async (v: VerificationResult) => {
     setBusy(true); setServerErr("");
     try {
-      await register({ ...f, phone: f.phone.replace(/\D/g, ""), ...ubic, verification: v });
+      await register({ ...f, phone: f.phone.replace(/\D/g, ""), ...ubic, verification: v, terms: TERMS_VERSION });
       setStep(2);
     } catch (e: any) {
       setServerErr(e.message); setStep(0); setVerif(null);
@@ -277,6 +265,7 @@ export function Register() {
             </div>
             <UbicacionSelect value={ubic} onChange={(v) => { setUbic(v); setErrors({ ...errors, departamento: "", municipio: "" }); }}
               errors={{ departamento: errors.departamento, municipio: errors.municipio }} />
+            <LegalConsent value={consent} onChange={(v) => { setConsent(v); setErrors({ ...errors, consent: "" }); }} error={errors.consent} />
           </div>
 
           <div className="mt-4 rounded-3xl bg-gradient-to-br from-[#eef0ff] to-[#f3eeff] p-4">

@@ -1,7 +1,8 @@
 -- =====================================================================
---  ConectaPRO · INSTALACIÓN COMPLETA PARA SUPABASE
+--  ConectaPRO · INSTALACIÓN / ACTUALIZACIÓN COMPLETA PARA SUPABASE
 --  Pega TODO este archivo en Supabase → SQL Editor → New query → Run.
---  Crea tablas, API segura, 33 departamentos, 1.105 municipios y datos de ejemplo.
+--  Crea o actualiza tablas, API segura, 33 departamentos, 1.105 municipios,
+--  datos del simulador, cuentas de prueba y el almacenamiento de fotos.
 --  Se puede ejecutar más de una vez sin perder los datos de usuarios reales.
 -- =====================================================================
 
@@ -304,6 +305,41 @@ drop function if exists api_publicar(text, text, text, text, double precision, d
 drop function if exists api_completar_registro(text, text, text, text, text);
 
 -- ---------------------------------------------------------------------
+--  Migraciones (versión 3)
+-- ---------------------------------------------------------------------
+-- Cuentas de prueba (QA): funcionan como cuentas reales, pero solo se ven entre ellas
+alter table perfiles add column if not exists prueba boolean not null default false;
+-- Foto de perfil guardada en Supabase Storage (ruta dentro del bucket "fotos-perfil")
+alter table perfiles add column if not exists foto_ruta text;
+-- Quién puede ver la foto: 'todos' o 'contactos' (personas con las que hay chat, postulación o acuerdo)
+alter table perfiles add column if not exists foto_privacidad text not null default 'todos';
+do $$ begin
+  alter table perfiles add constraint perfiles_foto_privacidad_chk check (foto_privacidad in ('todos', 'contactos'));
+exception when duplicate_object then null; end $$;
+-- Sectores que se muestran primero (el resto aparece con "Ver más")
+alter table categorias add column if not exists principal boolean not null default false;
+-- El proveedor decide si los clientes ven su punto exacto (por defecto solo se muestra aproximado)
+alter table proveedores add column if not exists ubicacion_publica boolean not null default false;
+
+-- Registro de aceptación de términos y condiciones (versión aceptada, fecha y navegador)
+create table if not exists terminos_aceptaciones (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  version text not null,
+  documentos text[] not null,
+  agente text,
+  aceptado timestamptz not null default now(),
+  unique (perfil_id, version)
+);
+
+-- Ya no hay respuestas automáticas: todas las postulaciones las hace una persona desde su cuenta
+delete from config where clave = 'auto_respuesta_demo';
+-- Versión vigente de los términos (debe coincidir con src/legal.ts)
+insert into config (clave, valor) values ('terminos_version', '2026-10-26')
+  on conflict (clave) do update set valor = excluded.valor;
+drop function if exists api_completar_registro(text, text, text, text, text, jsonb);
+
+-- ---------------------------------------------------------------------
 --  6. Seguridad: nadie accede a las tablas directamente
 -- ---------------------------------------------------------------------
 do $$
@@ -388,14 +424,71 @@ language sql stable security definer set search_path = public as $$
   select id from proveedores where perfil_id = p
 $$;
 
+-- "Mundo" de una cuenta. Las cuentas reales solo ven cuentas reales; las de prueba
+-- solo ven cuentas de prueba y las de simulación (demo) solo ven las de simulación.
+-- Sin sesión (p = null) se considera el mundo real.
+create or replace function cp_mundo(p uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce((select case when demo then 'demo' when prueba then 'prueba' else 'real' end from perfiles where id = p), 'real')
+$$;
+
+-- ¿Las personas a y b tienen relación? (chat, postulación o acuerdo entre ellas)
+create or replace function cp_es_contacto(a uuid, b uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select a is not null and b is not null and (
+    a = b
+    or exists (select 1 from conversaciones where usuario_a = least(a, b) and usuario_b = greatest(a, b))
+    or exists (select 1 from solicitudes s join postulaciones po on po.solicitud_id = s.id join proveedores p on p.id = po.proveedor_id
+               where (s.cliente_id = a and p.perfil_id = b) or (s.cliente_id = b and p.perfil_id = a))
+    or exists (select 1 from solicitudes s join proveedores p on p.id = s.proveedor_id
+               where (s.cliente_id = a and p.perfil_id = b) or (s.cliente_id = b and p.perfil_id = a)))
+$$;
+
+-- Foto de perfil que puede ver quien hace la petición (respeta la privacidad elegida).
+-- "sb:<bucket>/<ruta>" = archivo en Supabase Storage; la app arma la URL pública.
+create or replace function cp_foto(p uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select case
+    when pe.foto_ruta is null and pe.foto is null then null
+    when pe.foto_privacidad = 'todos' or cp_es_contacto(pe.id, cp_yo()) then coalesce('sb:fotos-perfil/' || pe.foto_ruta, pe.foto)
+    else null end
+  from perfiles pe where pe.id = p
+$$;
+
+-- Términos y condiciones
+create or replace function cp_terminos_version() returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce((select valor from config where clave = 'terminos_version'), '1')
+$$;
+
+create or replace function cp_terminos_ok(p uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  -- Las cuentas de simulación (demo) están exentas: solo existen para el simulador externo
+  select exists (select 1 from perfiles where id = p and demo)
+      or exists (select 1 from terminos_aceptaciones where perfil_id = p and version = cp_terminos_version())
+$$;
+
+create or replace function cp_requiere_terminos(p uuid) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not cp_terminos_ok(p) then
+    raise exception 'Para continuar debes leer y aceptar los términos y condiciones vigentes';
+  end if;
+end $$;
+
 -- Proveedor en formato JSON (el mismo formato que usa la aplicación)
+-- Privacidad: el punto exacto del proveedor solo lo ve él mismo, o todos si lo autorizó
+-- (ubicacion_publica). A los demás se les entrega redondeado a ~1 km.
 create or replace function cp_proveedor_json(pid uuid) returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
-    'id', p.id, 'userId', p.perfil_id, 'name', pe.nombre, 'photo', pe.foto,
+    'id', p.id, 'userId', p.perfil_id, 'name', pe.nombre, 'photo', cp_foto(pe.id),
     'company', p.empresa, 'profession', p.profesion,
     'services', coalesce((select jsonb_agg(servicio_id order by servicio_id) from proveedor_servicios where proveedor_id = p.id), '[]'::jsonb),
-    'rating', p.calificacion, 'reviews', p.num_resenas, 'lat', p.lat, 'lng', p.lng,
+    'rating', p.calificacion, 'reviews', p.num_resenas,
+    'lat', case when x.exacta then p.lat else round(p.lat::numeric, 2)::float end,
+    'lng', case when x.exacta then p.lng else round(p.lng::numeric, 2)::float end,
+    'exactLocation', x.exacta, 'publicLocation', p.ubicacion_publica, 'test', pe.prueba,
     'departamento', p.departamento, 'municipio', p.municipio,
     'city', cp_lugar(m.nombre, d.nombre), 'coverageKm', p.cobertura_km,
     'schedule', jsonb_build_object('days', to_jsonb(p.dias), 'from', p.hora_desde, 'to', p.hora_hasta),
@@ -408,24 +501,35 @@ language sql stable security definer set search_path = public as $$
   join perfiles pe on pe.id = p.perfil_id
   join municipios m on m.codigo = p.municipio
   join departamentos d on d.codigo = p.departamento
+  cross join lateral (select (p.ubicacion_publica or p.perfil_id = cp_yo()) as exacta) x
   where p.id = pid
 $$;
 
--- Solicitud en formato JSON
+-- Solicitud en formato JSON.
+-- Privacidad: la dirección y el punto exacto solo los ven el cliente y el proveedor contratado;
+-- los demás proveedores ven el municipio y un punto aproximado (~1 km). Cada proveedor solo ve
+-- su propia postulación; el cliente ve todas para compararlas.
 create or replace function cp_solicitud_json(sid uuid) returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
     'id', s.id, 'ownerAccountId', s.cliente_id, 'clientKey', s.cliente_id,
     'title', s.titulo, 'desc', s.descripcion, 'service', s.servicio_id,
-    'location', jsonb_build_object('lat', s.lat, 'lng', s.lng,
-       'label', coalesce(nullif(s.direccion, '') || ' · ', '') || cp_lugar(m.nombre, d.nombre)),
+    'location', jsonb_build_object(
+       'lat', case when v.priv then s.lat else round(s.lat::numeric, 2)::float end,
+       'lng', case when v.priv then s.lng else round(s.lng::numeric, 2)::float end,
+       'label', case when v.priv then coalesce(nullif(s.direccion, '') || ' · ', '') else '' end || cp_lugar(m.nombre, d.nombre),
+       'approximate', not v.priv),
     'departamento', s.departamento, 'municipio', s.municipio,
-    'municipioNombre', m.nombre, 'departamentoNombre', d.nombre, 'direccion', s.direccion,
+    'municipioNombre', m.nombre, 'departamentoNombre', d.nombre, 'direccion', case when v.priv then s.direccion end,
     'payment', s.metodo_pago, 'wantsProposals', s.recibir_propuestas,
     'createdAt', cp_ms(s.creado), 'status', s.estado,
-    'matched', coalesce((select jsonb_agg(proveedor_id) from solicitud_notificados where solicitud_id = s.id), '[]'::jsonb),
-    'applicants', coalesce((select jsonb_agg(jsonb_build_object('providerId', proveedor_id, 'price', precio, 'at', cp_ms(visible_desde), 'note', nota) order by visible_desde)
-                            from postulaciones where solicitud_id = s.id), '[]'::jsonb),
+    'matched', case when v.duena then coalesce((select jsonb_agg(proveedor_id) from solicitud_notificados where solicitud_id = s.id), '[]'::jsonb) else '[]'::jsonb end,
+    'matchedCount', (select count(*) from solicitud_notificados where solicitud_id = s.id),
+    'applicantsCount', (select count(*) from postulaciones where solicitud_id = s.id),
+    'applicants', coalesce((select jsonb_agg(jsonb_build_object('providerId', po.proveedor_id, 'price', po.precio, 'at', cp_ms(po.visible_desde), 'note', po.nota,
+                                   'distanceKm', round(cp_dist(s.lat, s.lng, pv.lat, pv.lng)::numeric, 1)) order by po.visible_desde)
+                            from postulaciones po join proveedores pv on pv.id = po.proveedor_id
+                            where po.solicitud_id = s.id and (v.duena or pv.perfil_id = v.yo)), '[]'::jsonb),
     'declinedBy', coalesce((select jsonb_agg(proveedor_id) from descartes where solicitud_id = s.id), '[]'::jsonb),
     'providerId', s.proveedor_id,
     'agreement', (select jsonb_build_object('date', to_char(a.fecha, 'YYYY-MM-DD'), 'time', to_char(a.hora, 'HH24:MI'),
@@ -436,17 +540,20 @@ language sql stable security definer set search_path = public as $$
     'clientRating', (select jsonb_build_object('stars', estrellas, 'comment', comentario, 'at', cp_ms(creado))
                from calificaciones where solicitud_id = s.id and rol_autor = 'proveedor'),
     'finishedAt', cp_ms(s.finalizado), 'photo', s.foto,
-    'punctualityPenalty', s.penalizacion_puntualidad, 'trace', s.traza,
-    'gps', s.ubicacion_gps, 'gpsPrecision', s.precision_m)
+    'punctualityPenalty', s.penalizacion_puntualidad, 'trace', case when v.duena then s.traza end,
+    'gps', s.ubicacion_gps, 'gpsPrecision', case when v.priv then s.precision_m end)
   from solicitudes s
   join municipios m on m.codigo = s.municipio
   join departamentos d on d.codigo = s.departamento
+  cross join lateral (select cp_yo() as yo) y
+  cross join lateral (select y.yo as yo, s.cliente_id = y.yo as duena,
+         s.cliente_id = y.yo or exists (select 1 from proveedores px where px.id = s.proveedor_id and px.perfil_id = y.yo) as priv) v
   where s.id = sid
 $$;
 
 create or replace function cp_cliente_json(p uuid) returns jsonb
 language sql stable security definer set search_path = public as $$
-  select jsonb_build_object('id', id, 'name', nombre, 'photo', foto, 'rating', calificacion, 'reviews', num_resenas)
+  select jsonb_build_object('id', id, 'name', nombre, 'photo', cp_foto(id), 'rating', calificacion, 'reviews', num_resenas, 'test', prueba)
   from perfiles where id = p
 $$;
 
@@ -463,23 +570,36 @@ language sql stable security definer set search_path = public as $$
            + case when a.disp = 'ahora' then 6 else 0 end
            + case when p.verificado then 3 else 0 end
   from proveedores p
+  join perfiles pe on pe.id = p.perfil_id
   join proveedor_servicios ps on ps.proveedor_id = p.id and ps.servicio_id = p_servicio
   cross join lateral (select cp_dist(p_lat, p_lng, p.lat, p.lng) as km) d
   cross join lateral (select cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta) as disp) a
   where p.activo and d.km <= p.cobertura_km
     and (p_excluir is null or p.perfil_id <> p_excluir)
+    -- solo proveedores del mismo "mundo" que quien publica (real, prueba o simulación)
+    and (case when pe.demo then 'demo' when pe.prueba then 'prueba' else 'real' end) = cp_mundo(p_excluir)
   order by 5 desc
 $$;
 
 -- =====================================================================
 --  API PÚBLICA (no requiere sesión)
 -- =====================================================================
+-- Catálogo de sectores y subcategorías. Los conteos de proveedores son reales y
+-- solo cuentan proveedores activos del mismo "mundo" de quien consulta.
 create or replace function api_catalogo() returns jsonb
 language sql stable security definer set search_path = public as $$
+  with prov as (
+    select ps.servicio_id, ps.proveedor_id
+    from proveedor_servicios ps join proveedores p on p.id = ps.proveedor_id join perfiles pe on pe.id = p.perfil_id
+    where p.activo and (case when pe.demo then 'demo' when pe.prueba then 'prueba' else 'real' end) = cp_mundo(cp_yo())
+  )
   select jsonb_build_object(
     'categorias', (select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.nombre, 'short', coalesce(c.corto, c.nombre), 'description', c.descripcion,
-                      'providers', (select count(distinct ps.proveedor_id) from proveedor_servicios ps join servicios s on s.id = ps.servicio_id where s.categoria = c.id)) order by c.orden) from categorias c),
-    'servicios', (select jsonb_agg(jsonb_build_object('id', id, 'name', nombre, 'short', corto, 'category', categoria, 'photo', foto) order by orden) from servicios))
+                      'main', c.principal,
+                      'providers', (select count(distinct prov.proveedor_id) from prov join servicios s on s.id = prov.servicio_id where s.categoria = c.id))
+                    order by c.principal desc, c.orden) from categorias c),
+    'servicios', (select jsonb_agg(jsonb_build_object('id', s.id, 'name', s.nombre, 'short', s.corto, 'category', s.categoria, 'photo', s.foto,
+                      'providers', (select count(*) from prov where prov.servicio_id = s.id)) order by s.orden) from servicios s))
 $$;
 
 create or replace function api_departamentos() returns jsonb
@@ -515,6 +635,17 @@ language sql stable security definer set search_path = public as $$
   where pe.demo and pe.correo in (select valor from config where clave like 'demo_login_%')
 $$;
 
+-- Las 4 cuentas de prueba (QA) del escenario "desayuno sorpresa"
+create or replace function api_cuentas_prueba() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('email', pe.correo, 'name', pe.nombre,
+           'role', case when p.id is null then 'Cliente (publica la necesidad)' else 'Proveedor · ' || p.empresa end,
+           'city', cp_lugar(m.nombre, d.nombre)) order by p.id nulls first, pe.correo), '[]'::jsonb)
+  from perfiles pe left join proveedores p on p.perfil_id = pe.id
+  left join municipios m on m.codigo = pe.municipio left join departamentos d on d.codigo = pe.departamento
+  where pe.prueba
+$$;
+
 -- Búsqueda de proveedores por ubicación administrativa (departamento / municipio),
 -- sector, subcategoría y texto. Si se envía la ubicación GPS del usuario, las
 -- distancias se calculan desde ese punto (sin cambiar el filtro de municipio).
@@ -524,6 +655,7 @@ create or replace function api_buscar_proveedores(
   p_orden text default 'rating', p_lat double precision default null, p_lng double precision default null)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v_lat double precision; v_lng double precision; v_yo uuid := cp_yo(); v_ref text; res jsonb; v_desde text := 'municipio';
+  v_mundo text := cp_mundo(cp_yo());
 begin
   p_departamento := nullif(p_departamento, ''); p_municipio := nullif(p_municipio, '');
   p_categoria := nullif(p_categoria, ''); p_servicio := nullif(p_servicio, '');
@@ -548,6 +680,7 @@ begin
            cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta) as disp
     from proveedores p join perfiles pe on pe.id = p.perfil_id
     where p.activo and (v_yo is null or p.perfil_id <> v_yo)
+      and (case when pe.demo then 'demo' when pe.prueba then 'prueba' else 'real' end) = v_mundo
   ), filtrados as (
     select b.*, case when p_municipio is not null and b.municipio <> p_municipio then 'cobertura' else 'local' end as ubic
     from base b
@@ -581,6 +714,7 @@ language sql stable security definer set search_path = public as $$
                                         'stars', c.estrellas, 'text', c.comentario, 'date', to_char(c.creado, 'DD/MM/YYYY')) order by c.creado desc)
     from calificaciones c join solicitudes s on s.id = c.solicitud_id join perfiles pe on pe.id = c.autor_id
     where s.proveedor_id = p_id and c.rol_autor = 'cliente' and c.comentario <> ''), '[]'::jsonb))
+  where exists (select 1 from proveedores p where p.id = p_id and cp_mundo(p.perfil_id) = cp_mundo(cp_yo()))
 $$;
 
 create or replace function api_vista_previa(p_servicio text, p_municipio text) returns int
@@ -596,8 +730,9 @@ language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
     'id', pe.id, 'name', pe.nombre, 'email', pe.correo, 'phone', coalesce(pe.celular, ''), 'document', coalesce(pe.documento, ''),
     'departamento', pe.departamento, 'municipio', pe.municipio,
-    'city', coalesce(cp_lugar(m.nombre, d.nombre), ''), 'photo', pe.foto, 'clientId', pe.id,
-    'providerId', (select id from proveedores where perfil_id = pe.id), 'verified', pe.verificado, 'demo', pe.demo)
+    'city', coalesce(cp_lugar(m.nombre, d.nombre), ''), 'photo', cp_foto(pe.id), 'clientId', pe.id,
+    'photoStored', pe.foto_ruta is not null, 'photoPath', pe.foto_ruta, 'photoPrivacy', pe.foto_privacidad,
+    'providerId', (select id from proveedores where perfil_id = pe.id), 'verified', pe.verificado, 'demo', pe.demo, 'test', pe.prueba)
   from perfiles pe left join municipios m on m.codigo = pe.municipio left join departamentos d on d.codigo = pe.departamento
   where pe.id = p
 $$;
@@ -605,7 +740,8 @@ $$;
 -- Se llama después de crear el usuario de autenticación
 create or replace function api_completar_registro(
   p_nombre text default null, p_documento text default null, p_celular text default null,
-  p_departamento text default null, p_municipio text default null, p_verificacion jsonb default null)
+  p_departamento text default null, p_municipio text default null, p_verificacion jsonb default null,
+  p_terminos text default null, p_agente text default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid(); v uuid; v_correo text;
 begin
@@ -613,10 +749,14 @@ begin
   select id into v from perfiles where auth_id = uid;
   if v is not null then return cp_cuenta_json(v); end if;
   v_correo := lower(coalesce(auth.jwt() ->> 'email', (select email from auth.users where id = uid)));
-  -- Cuentas de demostración: se vinculan al perfil de ejemplo con el mismo correo
-  update perfiles set auth_id = uid where lower(correo) = v_correo and demo and auth_id is null returning id into v;
+  -- Cuentas de simulación (demo) y de prueba (QA): se vinculan al perfil creado de antemano con el mismo correo
+  update perfiles set auth_id = uid where lower(correo) = v_correo and (demo or prueba) and auth_id is null returning id into v;
   if v is not null then return cp_cuenta_json(v); end if;
 
+  -- La aceptación de los términos es expresa (casillas sin marcar) y se registra con su versión
+  if p_terminos is distinct from cp_terminos_version() then
+    raise exception 'Para crear tu cuenta debes leer y aceptar los términos y condiciones y la política de privacidad vigentes';
+  end if;
   if length(trim(coalesce(p_nombre, ''))) < 3 or position(' ' in trim(p_nombre)) = 0 then raise exception 'Escribe tu nombre y apellido'; end if;
   if coalesce(p_documento, '') !~ '^[0-9.]{6,15}$' then raise exception 'Número de documento no válido'; end if;
   if length(regexp_replace(coalesce(p_celular, ''), '\D', '', 'g')) <> 10 then raise exception 'El celular debe tener 10 dígitos'; end if;
@@ -632,8 +772,46 @@ begin
   values (uid, trim(p_nombre), p_documento, p_celular, v_correo, p_departamento, p_municipio, true,
           p_verificacion || jsonb_build_object('fecha', now()), 100)
   returning id into v;
+  insert into terminos_aceptaciones (perfil_id, version, documentos, agente)
+  values (v, p_terminos, array['terminos', 'condiciones_uso', 'privacidad'], left(p_agente, 300));
   perform cp_notificar(v, 'info', '¡Bienvenido a ConectaPRO! Detectamos tu rostro en la validación facial. Ganaste 100 puntos de bienvenida.', '/perfil/beneficios');
   return cp_cuenta_json(v);
+end $$;
+
+-- Aceptación de los términos vigentes (cuentas creadas antes de esta versión, o cuando cambian)
+create or replace function api_aceptar_terminos(p_version text, p_agente text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if p_version is distinct from cp_terminos_version() then
+    raise exception 'Los términos cambiaron mientras los leías. Recarga la página para ver la versión vigente';
+  end if;
+  insert into terminos_aceptaciones (perfil_id, version, documentos, agente)
+  values (yo, p_version, array['terminos', 'condiciones_uso', 'privacidad'], left(p_agente, 300))
+  on conflict (perfil_id, version) do nothing;
+  return jsonb_build_object('version', p_version, 'aceptada', true);
+end $$;
+
+-- Foto de perfil: la app sube el archivo a Supabase Storage (bucket "fotos-perfil",
+-- carpeta = id del usuario) y aquí se asocia a la cuenta. p_ruta = null la elimina.
+-- Devuelve la ruta anterior para que la app borre ese archivo del almacenamiento.
+create or replace function api_foto_perfil(p_ruta text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); v_anterior text;
+begin
+  if p_ruta is not null and p_ruta !~ ('^' || auth.uid()::text || '/[A-Za-z0-9_-]{8,64}\.(jpg|jpeg|png|webp)$') then
+    raise exception 'Ruta de foto no válida';
+  end if;
+  select foto_ruta into v_anterior from perfiles where id = yo;
+  update perfiles set foto_ruta = p_ruta, foto = null where id = yo;
+  return jsonb_build_object('anterior', v_anterior, 'cuenta', cp_cuenta_json(yo));
+end $$;
+
+create or replace function api_foto_privacidad(p_valor text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if p_valor not in ('todos', 'contactos') then raise exception 'Opción de privacidad no válida'; end if;
+  update perfiles set foto_privacidad = p_valor where id = cp_req();
 end $$;
 
 create or replace function api_set_modo(p_modo text) returns void
@@ -653,13 +831,12 @@ begin
   if p_datos ? 'phone' and length(regexp_replace(p_datos->>'phone', '\D', '', 'g')) <> 10 then raise exception 'El celular debe tener 10 dígitos'; end if;
   if p_datos ? 'municipio' and not exists (select 1 from municipios where codigo = p_datos->>'municipio' and departamento = p_datos->>'departamento') then
     raise exception 'Selecciona un departamento y un municipio válidos'; end if;
-  if p_datos ? 'photo' and length(coalesce(p_datos->>'photo', '')) > 600000 then raise exception 'La foto es demasiado grande'; end if;
+  -- La foto de perfil ya no se guarda aquí: se administra con api_foto_perfil (Supabase Storage)
   update perfiles set
     nombre = coalesce(trim(p_datos->>'name'), nombre),
     celular = coalesce(p_datos->>'phone', celular),
     departamento = coalesce(p_datos->>'departamento', departamento),
-    municipio = coalesce(p_datos->>'municipio', municipio),
-    foto = case when p_datos ? 'photo' then p_datos->>'photo' else foto end
+    municipio = coalesce(p_datos->>'municipio', municipio)
   where id = yo;
   return cp_cuenta_json(yo);
 end $$;
@@ -688,7 +865,7 @@ end $$;
 create or replace function api_estado() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare
-  yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo);
+  yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); mundo text := cp_mundo(cp_req());
   pv record; mis jsonb; ops jsonb; trab jsonb; convs jsonb; provs jsonb; clis jsonb;
 begin
   select * into pv from proveedores where id = prov;
@@ -701,6 +878,7 @@ begin
     into ops
     from solicitudes s
     where s.estado = 'buscando' and s.cliente_id <> yo
+      and cp_mundo(s.cliente_id) = mundo
       and s.servicio_id in (select servicio_id from proveedor_servicios where proveedor_id = prov)
       and cp_dist(pv.lat, pv.lng, s.lat, s.lng) <= pv.cobertura_km
       and not exists (select 1 from descartes d where d.solicitud_id = s.id and d.proveedor_id = prov);
@@ -718,14 +896,14 @@ begin
 
   -- Clientes mencionados (oportunidades, trabajos, conversaciones)
   select coalesce(jsonb_object_agg(x.cid, cp_cliente_json(x.cid)), '{}'::jsonb) into clis from (
-    select s.cliente_id as cid from solicitudes s where prov is not null and (s.proveedor_id = prov or s.estado = 'buscando')
+    select s.cliente_id as cid from solicitudes s where prov is not null and (s.proveedor_id = prov or (s.estado = 'buscando' and cp_mundo(s.cliente_id) = mundo))
     union select case when c.usuario_a = yo then c.usuario_b else c.usuario_a end from conversaciones c where yo in (c.usuario_a, c.usuario_b)
   ) x;
 
   select coalesce(jsonb_agg(conv order by ult desc nulls last), '[]'::jsonb) into convs from (
     select jsonb_build_object(
       'id', c.id,
-      'peerKey', coalesce(pp.id, pe.id), 'peerUserId', pe.id, 'peerName', pe.nombre, 'peerPhoto', pe.foto,
+      'peerKey', coalesce(pp.id, pe.id), 'peerUserId', pe.id, 'peerName', pe.nombre, 'peerPhoto', cp_foto(pe.id), 'peerTest', pe.prueba,
       'peerRole', coalesce(pp.profesion, 'Cliente'),
       'unread', (select count(*) from mensajes m where m.conversacion_id = c.id and m.autor_id is distinct from yo
                  and m.creado > coalesce((select leido_hasta from lecturas l where l.conversacion_id = c.id and l.perfil_id = yo), 'epoch'::timestamptz)),
@@ -742,6 +920,8 @@ begin
 
   return jsonb_build_object(
     'cuenta', cp_cuenta_json(yo),
+    'terminos', jsonb_build_object('version', cp_terminos_version(), 'aceptada', cp_terminos_ok(yo),
+                  'fecha', (select cp_ms(max(aceptado)) from terminos_aceptaciones where perfil_id = yo and version = cp_terminos_version())),
     'modo', (select rol_activo from perfiles where id = yo),
     'puntos', (select puntos from perfiles where id = yo),
     'faltas', cp_faltas(yo),
@@ -774,6 +954,7 @@ language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); pid uuid; v_lat double precision; v_lng double precision; s text; img text; i int := 0;
   v_dias int[]; v_desde int; v_hasta int; v_gps boolean := false;
 begin
+  perform cp_requiere_terminos(yo);
   if length(trim(coalesce(p_datos->>'company', ''))) < 2 then raise exception 'Escribe el nombre de tu empresa, emprendimiento o marca'; end if;
   if jsonb_array_length(coalesce(p_datos->'services', '[]'::jsonb)) = 0 then raise exception 'Selecciona al menos una categoría de servicio'; end if;
   select lat, lng into v_lat, v_lng from municipios where codigo = p_datos->>'municipio' and departamento = p_datos->>'departamento';
@@ -812,6 +993,10 @@ begin
       ofrece = array(select jsonb_array_elements_text(coalesce(p_datos->'offers', '[]'::jsonb)))
     where id = pid;
   end if;
+  -- Autorización expresa para mostrar el punto exacto de atención (por defecto: aproximado)
+  if p_datos ? 'publicLocation' then
+    update proveedores set ubicacion_publica = coalesce((p_datos->>'publicLocation')::boolean, false) where id = pid;
+  end if;
 
   delete from proveedor_servicios where proveedor_id = pid;
   for s in select jsonb_array_elements_text(p_datos->'services') loop
@@ -844,8 +1029,9 @@ create or replace function api_publicar(
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   yo uuid := cp_req(); v_id uuid; v_lat double precision; v_lng double precision; v_titulo text; v_serv text;
-  tr jsonb; n int := 0; r record; i int := 0; auto boolean; v_gps boolean := false;
+  tr jsonb; n int := 0; r record; v_gps boolean := false; v_mundo text := cp_mundo(cp_req());
 begin
+  perform cp_requiere_terminos(yo);
   perform cp_no_suspendido(yo);
   if length(trim(coalesce(p_descripcion, ''))) < 10 then raise exception 'Describe tu necesidad (mínimo 10 caracteres)'; end if;
   if length(p_descripcion) > 500 then raise exception 'La descripción no puede superar 500 caracteres'; end if;
@@ -865,9 +1051,9 @@ begin
   if v_titulo = '' then v_titulo := v_serv; end if;
 
   tr := jsonb_build_object(
-    'total', (select count(*) from proveedores where activo),
+    'total', (select count(*) from proveedores p where p.activo and cp_mundo(p.perfil_id) = v_mundo),
     'byCategory', (select count(*) from proveedor_servicios ps join proveedores p on p.id = ps.proveedor_id
-                   where p.activo and ps.servicio_id = p_servicio and p.perfil_id <> yo),
+                   where p.activo and ps.servicio_id = p_servicio and p.perfil_id <> yo and cp_mundo(p.perfil_id) = v_mundo),
     'byCoverage', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo)),
     'bySchedule', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo) where disponibilidad <> 'otro'));
 
@@ -877,23 +1063,14 @@ begin
           p_pago, p_propuestas, (select foto from servicios where id = p_servicio), tr, v_gps, case when v_gps then p_precision end)
   returning id into v_id;
 
-  select coalesce((select valor = 'true' from config where clave = 'auto_respuesta_demo'), true) into auto;
-
-  for r in
-    select m.proveedor_id, m.perfil_id, m.distancia, p.precio_min, p.precio_max, pe.auth_id, pe.demo
-    from cp_match(p_servicio, v_lat, v_lng, yo) m
-    join proveedores p on p.id = m.proveedor_id join perfiles pe on pe.id = m.perfil_id
+  -- Se notifica a los proveedores compatibles. Nadie responde automáticamente:
+  -- cada postulación la envía el proveedor desde su propia cuenta (api_postular).
+  for r in select m.proveedor_id, m.perfil_id, m.distancia from cp_match(p_servicio, v_lat, v_lng, yo) m
   loop
     insert into solicitud_notificados values (v_id, r.proveedor_id, round(r.distancia::numeric, 2));
     perform cp_notificar(r.perfil_id, 'match',
       format('Nueva oportunidad de %s a %s km: "%s"', lower(v_serv), round(r.distancia::numeric, 1), v_titulo), '/oportunidad/' || v_id);
     n := n + 1;
-    -- Proveedores de ejemplo (sin cuenta de acceso) responden solos para que la plataforma se pueda probar
-    if auto and r.demo and r.auth_id is null and i < 3 then
-      insert into postulaciones (solicitud_id, proveedor_id, precio, visible_desde)
-      values (v_id, r.proveedor_id, greatest(5000, round((r.precio_min + r.precio_max) / 2.0 / 5000) * 5000), now() + make_interval(secs => 4 + i * 3));
-      i := i + 1;
-    end if;
   end loop;
 
   perform cp_notificar(yo, 'match', format('Notificamos a %s proveedores compatibles para "%s"', n, v_titulo), '/buscando/' || v_id);
@@ -930,9 +1107,10 @@ language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); s solicitudes; v_nombre text;
 begin
   if prov is null then raise exception 'Primero configura tu perfil de proveedor'; end if;
+  perform cp_requiere_terminos(yo);
   perform cp_no_suspendido(yo);
   select * into s from solicitudes where id = p_solicitud;
-  if s.id is null then raise exception 'La solicitud no existe'; end if;
+  if s.id is null or cp_mundo(s.cliente_id) <> cp_mundo(yo) then raise exception 'La solicitud no existe'; end if;
   if s.cliente_id = yo then raise exception 'No puedes postularte a tu propia solicitud'; end if;
   if s.estado <> 'buscando' then raise exception 'Esta solicitud ya fue asignada'; end if;
   if not exists (select 1 from proveedor_servicios where proveedor_id = prov and servicio_id = s.servicio_id) then
@@ -941,7 +1119,8 @@ begin
   insert into postulaciones (solicitud_id, proveedor_id, precio, nota) values (p_solicitud, prov, p_precio, nullif(trim(coalesce(p_nota, '')), ''))
   on conflict (solicitud_id, proveedor_id) do update set precio = excluded.precio, nota = excluded.nota;
   select nombre into v_nombre from perfiles where id = yo;
-  perform cp_notificar(s.cliente_id, 'match', format('%s aceptó tu solicitud "%s"', v_nombre, s.titulo), '/proveedores/' || s.id);
+  perform cp_notificar(s.cliente_id, 'match', format('%s se postuló a "%s" por $%s', v_nombre, s.titulo,
+    replace(to_char(p_precio, 'FM999,999,999'), ',', '.')), '/proveedores/' || s.id);
   return cp_solicitud_json(p_solicitud);
 end $$;
 
@@ -971,8 +1150,9 @@ end $$;
 
 create or replace function api_confirmar_acuerdo(p_solicitud uuid, p_proveedor uuid, p_fecha date, p_hora text, p_precio int) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare yo uuid := cp_req(); s solicitudes; v_codigo text; v_prov_perfil uuid; v_prov_nombre text; v_conv uuid;
+declare yo uuid := cp_req(); s solicitudes; v_codigo text; v_prov_perfil uuid; v_prov_nombre text; v_conv uuid; po record;
 begin
+  perform cp_requiere_terminos(yo);
   select * into s from solicitudes where id = p_solicitud for update;
   if s.id is null or s.cliente_id <> yo then raise exception 'Solicitud no encontrada'; end if;
   if s.estado <> 'buscando' then raise exception 'Esta solicitud ya tiene un acuerdo'; end if;
@@ -981,12 +1161,19 @@ begin
   if p_fecha < (now() at time zone 'America/Bogota')::date then raise exception 'La fecha no puede ser anterior a hoy'; end if;
 
   v_codigo := 'CP-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('acuerdo_seq')::text, 4, '0');
+  -- El precio del acuerdo es el que propuso el proveedor en su postulación
+  select precio into p_precio from postulaciones where solicitud_id = p_solicitud and proveedor_id = p_proveedor;
   insert into acuerdos (solicitud_id, codigo, fecha, hora, precio) values (p_solicitud, v_codigo, p_fecha, p_hora::time, p_precio);
   update solicitudes set estado = 'en_curso', proveedor_id = p_proveedor where id = p_solicitud;
 
   select p.perfil_id, pe.nombre into v_prov_perfil, v_prov_nombre from proveedores p join perfiles pe on pe.id = p.perfil_id where p.id = p_proveedor;
   perform cp_notificar(yo, 'agreement', format('Acuerdo digital %s confirmado con %s', v_codigo, v_prov_nombre), '/solicitud/' || p_solicitud);
   perform cp_notificar(v_prov_perfil, 'agreement', format('¡Te eligieron! Nuevo acuerdo %s: "%s"', v_codigo, s.titulo), '/trabajo/' || p_solicitud);
+  -- Los demás proveedores que se postularon reciben aviso de que la solicitud fue asignada
+  for po in select pe.id as perfil from postulaciones x join proveedores p on p.id = x.proveedor_id join perfiles pe on pe.id = p.perfil_id
+            where x.solicitud_id = p_solicitud and x.proveedor_id <> p_proveedor loop
+    perform cp_notificar(po.perfil, 'info', format('El cliente eligió otra propuesta para "%s". ¡Gracias por postularte!', s.titulo), '/oportunidad/' || p_solicitud);
+  end loop;
   v_conv := cp_conversacion(yo, v_prov_perfil);
   insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null, format('Acuerdo %s confirmado · %s', v_codigo, s.titulo));
   return cp_solicitud_json(p_solicitud) || jsonb_build_object('conversationId', v_conv);
@@ -999,6 +1186,7 @@ create or replace function api_calificar(p_solicitud uuid, p_estrellas int, p_co
 language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); s solicitudes; v_prov_perfil uuid; v_rol text; ya_completa boolean;
 begin
+  perform cp_requiere_terminos(yo);
   select * into s from solicitudes where id = p_solicitud for update;
   if s.id is null or s.proveedor_id is null then raise exception 'Solicitud no encontrada'; end if;
   if s.estado not in ('en_curso', 'completada') then raise exception 'Este servicio no se puede calificar'; end if;
@@ -1091,8 +1279,9 @@ create or replace function api_abrir_conversacion(p_perfil uuid default null, p_
 language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); otro uuid := p_perfil;
 begin
+  perform cp_requiere_terminos(yo);
   if otro is null and p_proveedor is not null then select perfil_id into otro from proveedores where id = p_proveedor; end if;
-  if otro is null or not exists (select 1 from perfiles where id = otro) then raise exception 'Usuario no encontrado'; end if;
+  if otro is null or not exists (select 1 from perfiles where id = otro) or cp_mundo(otro) <> cp_mundo(yo) then raise exception 'Usuario no encontrado'; end if;
   return cp_conversacion(yo, otro);
 end $$;
 
@@ -1100,6 +1289,7 @@ create or replace function api_enviar_mensaje(p_conversacion uuid, p_texto text 
 language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); c conversaciones; otro uuid; v_id uuid; v_nombre text;
 begin
+  perform cp_requiere_terminos(yo);
   select * into c from conversaciones where id = p_conversacion and yo in (usuario_a, usuario_b);
   if c.id is null then raise exception 'Conversación no encontrada'; end if;
   if coalesce(trim(p_texto), '') = '' and p_imagen is null then raise exception 'El mensaje está vacío'; end if;
@@ -1175,12 +1365,13 @@ $$;
 create or replace function api_trueque_buscar(p_ofrece text, p_necesita text, p_departamento text default null) returns jsonb
 language sql stable security definer set search_path = public as $$
   select coalesce(jsonb_agg(jsonb_build_object(
-      'id', t.id, 'userId', pe.id, 'name', pe.nombre, 'photo', pe.foto, 'offers', t.ofrece, 'needs', t.necesita, 'note', t.nota,
+      'id', t.id, 'userId', pe.id, 'name', pe.nombre, 'photo', cp_foto(pe.id), 'test', pe.prueba, 'offers', t.ofrece, 'needs', t.necesita, 'note', t.nota,
       'city', cp_lugar(m.nombre, d.nombre), 'perfect', (t.ofrece = p_necesita and t.necesita = p_ofrece))
     order by (t.ofrece = p_necesita and t.necesita = p_ofrece) desc, t.creado desc), '[]'::jsonb)
   from trueque_ofertas t join perfiles pe on pe.id = t.perfil_id
   left join municipios m on m.codigo = pe.municipio left join departamentos d on d.codigo = pe.departamento
   where t.activo and pe.id is distinct from cp_yo()
+    and (case when pe.demo then 'demo' when pe.prueba then 'prueba' else 'real' end) = cp_mundo(cp_yo())
     and (t.ofrece = p_necesita or t.necesita = p_ofrece)
     and (nullif(p_departamento, '') is null or pe.departamento = p_departamento)
 $$;
@@ -1189,6 +1380,7 @@ create or replace function api_trueque_publicar(p_ofrece text, p_necesita text, 
 language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req();
 begin
+  perform cp_requiere_terminos(yo);
   if p_ofrece = p_necesita then raise exception 'Lo que ofreces y lo que necesitas deben ser distintos'; end if;
   if length(trim(coalesce(p_nota, ''))) < 5 then raise exception 'Escribe una nota corta de tu propuesta'; end if;
   insert into trueque_ofertas (perfil_id, ofrece, necesita, nota) values (yo, p_ofrece, p_necesita, trim(p_nota));
@@ -1206,6 +1398,11 @@ create or replace function api_canjear(p_aliado int) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare yo uuid := cp_req(); a aliados; v_codigo text;
 begin
+  -- Los cupones solo tienen valor cuando exista un convenio firmado con la marca.
+  -- Mientras tanto no se generan códigos (serían resultados inventados).
+  if coalesce((select valor from config where clave = 'canjes_habilitados'), 'false') <> 'true' then
+    raise exception 'Los canjes con marcas aliadas aún no están disponibles: los convenios están en gestión. Tus puntos se conservan';
+  end if;
   select * into a from aliados where id = p_aliado;
   if a.id is null then raise exception 'Beneficio no encontrado'; end if;
   update perfiles set puntos = puntos - a.costo where id = yo and puntos >= a.costo;
@@ -1221,11 +1418,12 @@ end $$;
 revoke execute on all functions in schema public from public, anon, authenticated;
 grant execute on function
   api_catalogo(), api_departamentos(), api_municipios(text), api_municipio_cercano(double precision, double precision),
-  api_aliados(), api_demo_cuentas(), api_buscar_proveedores(text, text, text, text, text, boolean, text, double precision, double precision), api_proveedor(uuid),
+  api_aliados(), api_demo_cuentas(), api_cuentas_prueba(), api_buscar_proveedores(text, text, text, text, text, boolean, text, double precision, double precision), api_proveedor(uuid),
   api_vista_previa(text, text), api_trueque_buscar(text, text, text)
 to anon, authenticated;
 grant execute on function
-  api_completar_registro(text, text, text, text, text, jsonb), api_set_modo(text), api_actualizar_perfil(jsonb),
+  api_completar_registro(text, text, text, text, text, jsonb, text, text), api_aceptar_terminos(text, text),
+  api_foto_perfil(text), api_foto_privacidad(text), api_set_modo(text), api_actualizar_perfil(jsonb),
   api_preferencias(boolean, boolean, boolean), api_eliminar_cuenta(), api_estado(), api_guardar_proveedor(jsonb),
   api_publicar(text, text, text, text, double precision, double precision, text, text, boolean, int),
   api_editar_solicitud(uuid, text, text, text), api_eliminar_solicitud(uuid), api_postular(uuid, int, text), api_descartar(uuid),
@@ -1235,6 +1433,7 @@ grant execute on function
   api_direccion_eliminar(uuid), api_pago_guardar(text, text), api_pago_predeterminado(uuid), api_pago_eliminar(uuid),
   api_trueque_publicar(text, text, text), api_trueque_eliminar(uuid), api_canjear(int)
 to authenticated;
+
 -- Generado por supabase/generar_seed.py — NO editar a mano.
 
 -- Departamentos y municipios de Colombia (DIVIPOLA) + catálogo + datos de ejemplo.
@@ -2400,6 +2599,7 @@ insert into categorias (id, nombre, corto, descripcion, orden) values
 ('eventos','Eventos','Eventos','Decoración, fotografía, música y comida',11),
 ('mas','Otros servicios','Otros','Cuidado de personas, mandados y más',12)
 on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, descripcion = excluded.descripcion, orden = excluded.orden;
+update categorias set principal = (id in ('hogar', 'belleza', 'eventos'));
 
 insert into servicios (id, nombre, corto, categoria, foto, palabras, orden) values
 ('plomeria','Plomería','Plomería','hogar','img/plomeria.jpg','fuga tuberia agua grifo griferia lavaplatos sanitario baño desague cañeria tanque',0),
@@ -2466,10 +2666,11 @@ insert into servicios (id, nombre, corto, categoria, foto, palabras, orden) valu
 ('musica_dj','Música y DJ','DJ','eventos',null,'dj sonido musica fiesta',61),
 ('catering','Catering y meseros','Catering','eventos',null,'comida evento meseros banquete',62),
 ('animacion_infantil','Animación infantil','Animación','eventos',null,'recreacion niños payaso fiesta infantil',63),
-('cuidado_ninos','Cuidado de niños','Niñera','mas',null,'niñera cuidar niños bebe',64),
-('adulto_mayor','Acompañamiento adulto mayor','Adulto mayor','mas',null,'acompañante abuelo cuidado',65),
-('mandados','Mandados y diligencias','Mandados','mas',null,'diligencia mandado tramite fila',66),
-('otro','Otro servicio','Otro','mas',null,'otro',67)
+('desayunos_sorpresa','Desayunos y detalles sorpresa','Desayunos sorpresa','eventos',null,'desayuno sorpresa detalle regalo cumpleaños aniversario ancheta',64),
+('cuidado_ninos','Cuidado de niños','Niñera','mas',null,'niñera cuidar niños bebe',65),
+('adulto_mayor','Acompañamiento adulto mayor','Adulto mayor','mas',null,'acompañante abuelo cuidado',66),
+('mandados','Mandados y diligencias','Mandados','mas',null,'diligencia mandado tramite fila',67),
+('otro','Otro servicio','Otro','mas',null,'otro',68)
 on conflict (id) do update set nombre = excluded.nombre, corto = excluded.corto, categoria = excluded.categoria, foto = excluded.foto, palabras = excluded.palabras, orden = excluded.orden;
 
 insert into aliados (id, marca, oferta, costo, color) values
@@ -2481,7 +2682,7 @@ on conflict (id) do update set marca = excluded.marca, oferta = excluded.oferta,
 
 select setval('aliados_id_seq', (select max(id) from aliados));
 
-insert into config (clave, valor) values ('auto_respuesta_demo','true'),('demo_login_1','daniela@conectapro.co'),('demo_login_2','carlos@conectapro.co'),('demo_login_3','juan@conectapro.co'),('demo_login_4','andres@conectapro.co') on conflict (clave) do update set valor = excluded.valor;
+insert into config (clave, valor) values ('demo_login_1','daniela@conectapro.co'),('demo_login_2','carlos@conectapro.co'),('demo_login_3','juan@conectapro.co'),('demo_login_4','andres@conectapro.co') on conflict (clave) do update set valor = excluded.valor;
 
 insert into perfiles (id, nombre, correo, foto, celular, documento, departamento, municipio, puntos, calificacion, num_resenas, verificado, demo) values
 ('a0000000-0000-4000-8000-000000000001','Daniela Jaramillo','daniela@conectapro.co','img/daniela.jpg','3009876543','1000000001','05','05615',320,4.9,14,true,true),
@@ -2959,3 +3160,117 @@ grant execute on function api_reiniciar_demo() to authenticated;
 select cp_sembrar_demo();
 
 commit;
+
+-- =====================================================================
+--  Cuentas de PRUEBA (QA) · escenario "desayuno sorpresa"
+--
+--  4 cuentas independientes marcadas con perfiles.prueba = true:
+--    · prueba.cliente@conectapro.co      → publica la necesidad
+--    · prueba.proveedor1@conectapro.co   → ofrece desayunos sorpresa
+--    · prueba.proveedor2@conectapro.co   → ofrece desayunos sorpresa
+--    · prueba.proveedor3@conectapro.co   → ofrece desayunos sorpresa
+--  Contraseña de las cuatro: Prueba2026*  (el acceso se crea la primera vez que se ingresa)
+--
+--  Funcionan exactamente como cuentas reales (todo se guarda en la base de datos y
+--  nadie responde automáticamente), pero viven en su propio "mundo": solo se ven
+--  entre ellas, nunca aparecen a usuarios reales y llevan la etiqueta "Cuenta de prueba".
+--  Este archivo NO crea solicitudes: el escenario lo ejecutan las propias cuentas.
+-- =====================================================================
+begin;
+
+insert into perfiles (id, nombre, correo, celular, documento, departamento, municipio, puntos, calificacion, num_resenas,
+                      verificado, demo, prueba, rol_activo) values
+('e0000000-0000-4000-8000-000000000001', 'Cliente Prueba',        'prueba.cliente@conectapro.co',    '3000000001', '9000000001', '54', '54001', 100, 5.0, 0, false, false, true, 'cliente'),
+('e0000000-0000-4000-8000-000000000002', 'Proveedor Prueba Uno',  'prueba.proveedor1@conectapro.co', '3000000002', '9000000002', '54', '54001', 100, 5.0, 0, false, false, true, 'proveedor'),
+('e0000000-0000-4000-8000-000000000003', 'Proveedor Prueba Dos',  'prueba.proveedor2@conectapro.co', '3000000003', '9000000003', '54', '54874', 100, 5.0, 0, false, false, true, 'proveedor'),
+('e0000000-0000-4000-8000-000000000004', 'Proveedor Prueba Tres', 'prueba.proveedor3@conectapro.co', '3000000004', '9000000004', '54', '54405', 100, 5.0, 0, false, false, true, 'proveedor')
+on conflict (id) do update set nombre = excluded.nombre, correo = excluded.correo, departamento = excluded.departamento,
+  municipio = excluded.municipio, demo = false, prueba = true;
+
+insert into proveedores (id, perfil_id, empresa, profesion, departamento, municipio, lat, lng, cobertura_km, dias, hora_desde, hora_hasta,
+                         precio_min, precio_max, descripcion, ofrece, telefono, calificacion, num_resenas, completados, verificado) values
+('f0000000-0000-4000-8000-000000000002', 'e0000000-0000-4000-8000-000000000002', 'Desayunos Prueba Uno', 'Desayunos sorpresa',
+  '54', '54001', 7.8990, -72.5010, 15, '{0,1,2,3,4,5,6}', 6, 20, 60000, 95000,
+  'Cuenta de prueba. Desayunos sorpresa con frutas, jugo natural y globos.', '{Desayuno sorpresa clásico,Tarjeta personalizada}', '3000000002', 5.0, 0, 0, false),
+('f0000000-0000-4000-8000-000000000003', 'e0000000-0000-4000-8000-000000000003', 'Desayunos Prueba Dos', 'Desayunos sorpresa',
+  '54', '54874', 7.8338889, -72.4741667, 15, '{0,1,2,3,4,5,6}', 6, 20, 75000, 130000,
+  'Cuenta de prueba. Desayunos sorpresa con decoración y entrega a domicilio.', '{Desayuno sorpresa premium,Decoración con globos}', '3000000003', 5.0, 0, 0, false),
+('f0000000-0000-4000-8000-000000000004', 'e0000000-0000-4000-8000-000000000004', 'Desayunos Prueba Tres', 'Desayunos sorpresa',
+  '54', '54405', 7.8383333, -72.5133333, 15, '{0,1,2,3,4,5,6}', 6, 20, 50000, 85000,
+  'Cuenta de prueba. Desayunos sorpresa sencillos y anchetas.', '{Desayuno sorpresa sencillo,Ancheta}', '3000000004', 5.0, 0, 0, false)
+on conflict (id) do update set empresa = excluded.empresa, profesion = excluded.profesion, departamento = excluded.departamento,
+  municipio = excluded.municipio, lat = excluded.lat, lng = excluded.lng, cobertura_km = excluded.cobertura_km, activo = true;
+
+insert into proveedor_servicios (proveedor_id, servicio_id) values
+('f0000000-0000-4000-8000-000000000002', 'desayunos_sorpresa'),
+('f0000000-0000-4000-8000-000000000003', 'desayunos_sorpresa'),
+('f0000000-0000-4000-8000-000000000004', 'desayunos_sorpresa')
+on conflict do nothing;
+
+-- Deja las cuentas de prueba como nuevas (borra solo los datos de las cuentas de prueba)
+create or replace function cp_reiniciar_pruebas() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from solicitudes where cliente_id in (select id from perfiles where prueba);
+  delete from conversaciones where usuario_a in (select id from perfiles where prueba) or usuario_b in (select id from perfiles where prueba);
+  delete from notificaciones where perfil_id in (select id from perfiles where prueba);
+  delete from faltas where perfil_id in (select id from perfiles where prueba);
+  delete from canjes where perfil_id in (select id from perfiles where prueba);
+  delete from trueque_ofertas where perfil_id in (select id from perfiles where prueba);
+  update proveedores set calificacion = 5.0, num_resenas = 0, completados = 0, activo = true
+   where perfil_id in (select id from perfiles where prueba);
+  update perfiles set calificacion = 5.0, num_resenas = 0, puntos = 100,
+         rol_activo = case when exists (select 1 from proveedores p where p.perfil_id = perfiles.id) then 'proveedor' else 'cliente' end
+   where prueba;
+end $$;
+
+create or replace function api_reiniciar_pruebas() returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from perfiles where id = cp_req() and prueba) then
+    raise exception 'Solo las cuentas de prueba pueden reiniciar el escenario de prueba';
+  end if;
+  perform cp_reiniciar_pruebas();
+end $$;
+
+revoke execute on function cp_reiniciar_pruebas() from public, anon, authenticated;
+grant execute on function api_reiniciar_pruebas() to authenticated;
+
+commit;
+
+-- =====================================================================
+--  Almacenamiento de fotos de perfil (Supabase Storage)
+--
+--  Bucket "fotos-perfil":
+--    · Cada usuario solo puede subir, ver en el listado y borrar archivos dentro
+--      de su propia carpeta (<id de usuario>/archivo.jpg).
+--    · Los archivos tienen nombres aleatorios y la app solo entrega la ruta a quien
+--      tiene permiso de verla (privacidad "todos" o "contactos", ver cp_foto).
+--    · Máximo 2 MB; solo JPG, PNG o WEBP.
+--  En un PostgreSQL local (sin Supabase) este bloque no hace nada.
+-- =====================================================================
+do $$
+begin
+  if to_regclass('storage.buckets') is null or to_regclass('storage.objects') is null then
+    raise notice 'Supabase Storage no está disponible en esta base de datos: se omite la configuración de fotos';
+    return;
+  end if;
+
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('fotos-perfil', 'fotos-perfil', true, 2097152, array['image/jpeg', 'image/png', 'image/webp'])
+  on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+  drop policy if exists "fotos_perfil_subir_propia" on storage.objects;
+  create policy "fotos_perfil_subir_propia" on storage.objects for insert to authenticated
+    with check (bucket_id = 'fotos-perfil' and (storage.foldername(name))[1] = (select auth.uid()::text));
+
+  drop policy if exists "fotos_perfil_ver_propia" on storage.objects;
+  create policy "fotos_perfil_ver_propia" on storage.objects for select to authenticated
+    using (bucket_id = 'fotos-perfil' and (storage.foldername(name))[1] = (select auth.uid()::text));
+
+  drop policy if exists "fotos_perfil_borrar_propia" on storage.objects;
+  create policy "fotos_perfil_borrar_propia" on storage.objects for delete to authenticated
+    using (bucket_id = 'fotos-perfil' and (storage.foldername(name))[1] = (select auth.uid()::text));
+exception when others then
+  raise warning 'No se pudo configurar el almacenamiento de fotos: %. Créalo desde Storage → New bucket ("fotos-perfil", público) y vuelve a ejecutar este bloque.', sqlerrm;
+end $$;

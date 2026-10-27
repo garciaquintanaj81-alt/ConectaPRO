@@ -79,7 +79,7 @@ const checkHash = (pw, h) => { const [salt] = h.split(":"); return hash(pw, salt
 // ---------------------------------------------------------------- HTTP
 const send = (res, code, body) => {
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS" });
+    "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS" });
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 };
 const readBody = (req) => new Promise((r) => { let d = ""; req.on("data", (c) => (d += c)); req.on("end", () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } }); });
@@ -149,13 +149,63 @@ commit;`;
   }
 }
 
-const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".svg": "image/svg+xml", ".json": "application/json" };
+// ---------------------------------------------------------------- Storage
+// Imita Supabase Storage para el bucket "fotos-perfil" (mismas reglas que supabase/storage.sql):
+// cada usuario solo puede subir y borrar dentro de su carpeta <id de usuario>/
+const STORAGE_DIR = process.env.STORAGE_DIR || path.join(ROOT, ".storage-local");
+const BUCKETS = { "fotos-perfil": { max: 2 * 1024 * 1024, types: ["image/jpeg", "image/png", "image/webp"] } };
+const readRaw = (req) => new Promise((r) => { const parts = []; req.on("data", (c) => parts.push(c)); req.on("end", () => r(Buffer.concat(parts))); });
+const safeKey = (k) => /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_.-]+)+$/.test(k) && !k.includes("..");
+
+async function storage(req, res, url) {
+  const rest = decodeURIComponent(url.pathname.replace("/storage/v1/object/", ""));
+  if (req.method === "GET" && rest.startsWith("public/")) {
+    const key = rest.slice(7);
+    const f = path.join(STORAGE_DIR, key);
+    if (!safeKey(key) || !fs.existsSync(f)) return send(res, 404, { statusCode: "404", error: "not_found", message: "Object not found" });
+    res.writeHead(200, { "Content-Type": MIME[path.extname(f)] || "application/octet-stream", "Access-Control-Allow-Origin": "*" });
+    return fs.createReadStream(f).pipe(res);
+  }
+  const claims = verifyJwt((req.headers.authorization || "").replace(/^Bearer /, ""));
+  if (!claims) return send(res, 403, { statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" });
+  const [bucket, ...parts] = rest.split("/");
+  const cfg = BUCKETS[bucket];
+  if (!cfg) return send(res, 404, { statusCode: "404", error: "Bucket not found", message: "Bucket not found" });
+  if (req.method === "POST" || req.method === "PUT") {
+    const key = parts.join("/");
+    if (!safeKey(bucket + "/" + key) || parts[0] !== claims.sub)
+      return send(res, 403, { statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" });
+    const type = String(req.headers["content-type"] || "").split(";")[0];
+    if (!cfg.types.includes(type)) return send(res, 415, { statusCode: "415", error: "invalid_mime_type", message: `mime type ${type} is not supported` });
+    const body = await readRaw(req);
+    if (body.length > cfg.max) return send(res, 413, { statusCode: "413", error: "Payload too large", message: "The object exceeded the maximum allowed size" });
+    const f = path.join(STORAGE_DIR, bucket, key);
+    if (fs.existsSync(f)) return send(res, 409, { statusCode: "409", error: "Duplicate", message: "The resource already exists" });
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, body);
+    return send(res, 200, { Key: `${bucket}/${key}` });
+  }
+  if (req.method === "DELETE") {
+    const { prefixes = [] } = await readBody(req);
+    const removed = [];
+    for (const k of prefixes) {
+      if (!safeKey(bucket + "/" + k) || k.split("/")[0] !== claims.sub) continue;   // la política solo permite borrar lo propio
+      const f = path.join(STORAGE_DIR, bucket, k);
+      if (fs.existsSync(f)) { fs.unlinkSync(f); removed.push({ name: k, bucket_id: bucket }); }
+    }
+    return send(res, 200, removed);
+  }
+  send(res, 405, { message: "Method not allowed" });
+}
+
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".json": "application/json" };
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
     if (req.method === "OPTIONS") return send(res, 204, "");
     if (url.pathname.startsWith("/auth/v1/")) return await auth(req, res, url);
     if (url.pathname.startsWith("/rest/v1/rpc/")) return await rpc(req, res, url.pathname.split("/").pop());
+    if (url.pathname.startsWith("/storage/v1/object/")) return await storage(req, res, url);
     let f = path.join(STATIC, decodeURIComponent(url.pathname));
     if (!f.startsWith(STATIC)) return send(res, 403, {});
     if (fs.existsSync(f) && fs.statSync(f).isDirectory()) f = path.join(f, "index.html");

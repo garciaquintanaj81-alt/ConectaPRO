@@ -9,7 +9,8 @@ import {
 import type { IconType } from "react-icons";
 import { useStore } from "./store";
 import { Link, navigate, useRoute } from "./router";
-import { Avatar, Logo, cx } from "./ui";
+import { Avatar, Logo, TestBadge, cx } from "./ui";
+import { ZonaChip } from "./zona";
 
 interface NavItem { to: string; label: string; icon: IconType; match?: string[] }
 
@@ -143,11 +144,13 @@ function TopBar() {
   if (!account) return null;
   return (
     <header className="sticky top-0 z-20 hidden items-center justify-between border-b border-line bg-white/90 px-8 py-3 backdrop-blur lg:flex">
-      <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold ring-1 ring-line">
-        <LuMapPin className="h-4 w-4 text-brand-blue" />
-        {mode === "proveedor" && myProvider ? `${myProvider.city} · cobertura ${myProvider.coverageKm} km` : account.city}
-      </div>
+      {mode === "proveedor" && myProvider ? (
+        <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold ring-1 ring-line">
+          <LuMapPin className="h-4 w-4 text-brand-blue" />{`${myProvider.city} · cobertura ${myProvider.coverageKm} km`}
+        </div>
+      ) : <ZonaChip className="max-w-md" />}
       <div className="flex items-center gap-4">
+        {account.test && <TestBadge />}
         <Link to="/notificaciones" className="relative rounded-full bg-white p-2.5 ring-1 ring-line hover:ring-brand/40" aria-label="Notificaciones">
           <LuBell className="h-5 w-5" />
           {unread > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-bad px-1 text-[11px] font-bold text-white">{unread}</span>}
@@ -169,20 +172,25 @@ function TopBar() {
 //  Barra superior móvil (pantallas de inicio): logo + ubicación + campana
 // ---------------------------------------------------------------------
 export function MobileTopBar() {
-  const { notifications } = useStore();
+  const { notifications, mode, account } = useStore();
   const unread = notifications.some((n) => !n.read);
   return (
-    <div className="mb-6 flex items-center justify-between lg:hidden">
+    <div className="mb-6 lg:hidden">
+    <div className="flex items-center justify-between">
       <Logo size="md" />
       <div className="flex items-center gap-2">
-        <Link to="/perfil/direcciones" aria-label="Ubicación" className="flex h-12 w-12 items-center justify-center rounded-full bg-white/80 ring-1 ring-line">
-          <LuMapPin className="h-6 w-6" />
-        </Link>
         <Link to="/notificaciones" aria-label="Notificaciones" className="relative flex h-12 w-12 items-center justify-center rounded-full bg-white/80 ring-1 ring-line">
           <LuBell className="h-6 w-6" />
           {unread && <span className="absolute right-2.5 top-2.5 h-3 w-3 rounded-full bg-bad ring-2 ring-white" />}
         </Link>
       </div>
+    </div>
+    {(mode === "cliente" || account?.test) && (
+      <div className="mt-3 flex items-center gap-2">
+        {mode === "cliente" && <ZonaChip compact className="max-w-[70%]" />}
+        {account?.test && <TestBadge />}
+      </div>
+    )}
     </div>
   );
 }

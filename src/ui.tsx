@@ -8,11 +8,12 @@ import {
   LuActivity, LuBrain, LuApple, LuDumbbell, LuBath, LuGraduationCap, LuBookOpen, LuLanguages, LuMusic, LuBike,
   LuUtensils, LuCakeSlice, LuShoppingBag, LuMegaphone, LuSprout, LuTractor, LuWheat, LuCalculator, LuScale,
   LuPalette, LuDraftingCompass, LuPartyPopper, LuCamera, LuDisc3, LuChefHat, LuBaby, LuHandHeart, LuStore,
-  LuBriefcase, LuHardHat, LuStethoscope, LuBone, LuMilk, LuCircleHelp, LuBookA,
+  LuBriefcase, LuHardHat, LuStethoscope, LuBone, LuMilk, LuCircleHelp, LuBookA, LuCoffee, LuFlaskConical, LuChevronDown,
 } from "react-icons/lu";
 import type { IconType } from "react-icons";
-import { CategoryId, PaymentMethod, ServiceId, serviceById } from "./data";
+import { CATEGORIES, Category, CategoryId, PaymentMethod, ServiceId, serviceById } from "./data";
 import { goBack } from "./router";
+import { photoSrc } from "./api";
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
@@ -41,7 +42,7 @@ const SRV_ICONS: Record<string, IconType> = {
   domicilios: LuBike, comida_casera: LuUtensils, reposteria: LuCakeSlice, ventas_catalogo: LuShoppingBag, marketing_redes: LuMegaphone,
   jornaleros: LuWheat, fumigacion_cultivos: LuBug, asistencia_agro: LuSprout, maquinaria_agricola: LuTractor, veterinaria_rural: LuMilk,
   contabilidad: LuCalculator, asesoria_legal: LuScale, diseno_grafico: LuPalette, traduccion: LuLanguages, arquitectura: LuDraftingCompass,
-  decoracion_eventos: LuPartyPopper, fotografia_video: LuCamera, musica_dj: LuDisc3, catering: LuChefHat, animacion_infantil: LuSparkles,
+  decoracion_eventos: LuPartyPopper, fotografia_video: LuCamera, musica_dj: LuDisc3, catering: LuChefHat, animacion_infantil: LuSparkles, desayunos_sorpresa: LuCoffee,
   cuidado_ninos: LuBaby, adulto_mayor: LuHandHeart, mandados: LuPackage, otro: LuEllipsis,
 };
 export const SERVICE_ICON: Record<ServiceId, IconType> = new Proxy(SRV_ICONS, {
@@ -82,7 +83,7 @@ export function Avatar({ name, photo, size = 48, dot, verified, className }: { n
   return (
     <div className={cx("relative shrink-0", className)} style={{ width: size, height: size }}>
       {photo ? (
-        <img src={photo} alt={name} className="h-full w-full rounded-full object-cover ring-4 ring-white shadow-sm" />
+        <img src={photoSrc(photo)} alt={name} className="h-full w-full rounded-full object-cover ring-4 ring-white shadow-sm" />
       ) : (
         <div className={cx("flex h-full w-full items-center justify-center rounded-full font-bold ring-4 ring-white", bg)} style={{ fontSize: size * 0.36 }}>{initials}</div>
       )}
@@ -120,6 +121,8 @@ export function Stars({ value, size = 16, onChange }: { value: number; size?: nu
 }
 
 export function Rating({ value, count, className }: { value: number; count?: number; className?: string }) {
+  // Sin reseñas no se muestra un puntaje inventado
+  if (count === 0) return <span className={cx("inline-flex shrink-0 items-center gap-1 font-semibold text-ink-soft", className)}><LuStar className="h-[1.1em] w-[1.1em] text-[#c9cfe0]" /> <span title="Aún no tiene reseñas">Nuevo</span></span>;
   return (
     <span className={cx("inline-flex items-center gap-1 font-bold text-[#8a5a00]", className)}>
       <LuStar className="h-[1.1em] w-[1.1em] fill-star text-star" /> {value.toFixed(1)}
@@ -143,6 +146,72 @@ export function Badge({ tone = "brand", children, icon: Icon, className }: { ton
       {children}
     </span>
   );
+}
+
+/** Etiqueta visible en las cuentas de prueba (QA) para no confundirlas con usuarios reales */
+export function TestBadge({ className }: { className?: string }) {
+  return (
+    <span className={cx("inline-flex items-center gap-1 rounded-full bg-[#fff4dc] px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-[#9a5b00] ring-1 ring-[#f5d58a]", className)} title="Cuenta de prueba: no es un usuario real">
+      <LuFlaskConical className="h-3 w-3" /> Cuenta de prueba
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------
+//  Sectores: se muestran los 3 principales y el resto con "Ver más"
+// ---------------------------------------------------------------------
+export function mainCategories(): Category[] {
+  const main = CATEGORIES.filter((c) => c.main);
+  return (main.length ? main : CATEGORIES).slice(0, 3);
+}
+
+export function CategoryPicker({ value, onChange, variant = "tiles", hrefFor, showCount }: {
+  value?: string;
+  onChange?: (id: string) => void;
+  variant?: "tiles" | "list" | "chips";
+  /** Si se indica, cada sector es un enlace (pantalla de inicio) */
+  hrefFor?: (id: string) => string;
+  showCount?: boolean;
+}) {
+  const main = mainCategories();
+  const selectedIsExtra = !!value && !main.some((c) => c.id === value);
+  const [more, setMore] = useState(selectedIsExtra);
+  useEffect(() => { if (selectedIsExtra) setMore(true); }, [selectedIsExtra]);
+  const list = more ? [...main, ...CATEGORIES.filter((c) => !main.includes(c))] : main;
+  const item = (c: Category) => {
+    const Icon = CATEGORY_ICON[c.id];
+    const active = value === c.id;
+    const inner = variant === "chips" ? (
+      <><Icon className="h-4 w-4" />{c.short}{showCount && c.providers != null && <span className={cx("text-xs", active ? "text-white/80" : "text-ink-soft")}>({c.providers})</span>}</>
+    ) : (
+      <>
+        <span className={cx("flex shrink-0 items-center justify-center rounded-lg", c.tint, variant === "tiles" ? "h-10 w-10" : "h-9 w-9")}><Icon className={variant === "tiles" ? "h-5 w-5" : "h-[18px] w-[18px]"} /></span>
+        <span className={cx("min-w-0 font-semibold leading-tight", variant === "tiles" ? "text-[13px] sm:text-[14px]" : "text-sm")}>{variant === "tiles" ? c.short : c.name}</span>
+      </>
+    );
+    const cls = variant === "chips"
+      ? cx("inline-flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-semibold transition", active ? "bg-brand text-white shadow-brand" : "bg-white ring-1 ring-line hover:ring-brand/40")
+      : variant === "tiles"
+        ? cx("group flex min-w-0 flex-col items-center gap-2 rounded-xl bg-white px-1.5 py-3 text-center ring-1 transition hover:ring-brand/40", active ? "ring-2 ring-brand" : "ring-line")
+        : cx("flex items-center gap-2.5 rounded-xl p-3 text-left ring-1 transition hover:ring-brand/40", active ? "bg-brand-50 ring-2 ring-brand" : "ring-line");
+    return hrefFor
+      ? <a key={c.id} href={"#" + hrefFor(c.id)} className={cls} title={c.description}>{inner}</a>
+      : <button key={c.id} type="button" onClick={() => onChange?.(active && variant === "chips" ? "" : c.id)} className={cls} title={c.description} aria-pressed={active}>{inner}</button>;
+  };
+  const moreBtn = (
+    <button type="button" onClick={() => setMore(!more)} aria-expanded={more}
+      className={cx(variant === "chips"
+        ? "inline-flex shrink-0 items-center gap-1 rounded-full px-3.5 py-2 text-sm font-semibold text-brand ring-1 ring-brand/30 hover:bg-brand-50"
+        : variant === "tiles"
+          ? "flex min-w-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-brand/40 px-1 py-3 text-center text-[12.5px] font-semibold leading-tight text-brand hover:bg-brand-50"
+          : "flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-brand/40 p-3 text-sm font-semibold text-brand hover:bg-brand-50")}>
+      {variant === "tiles" && !more && <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50"><LuEllipsis className="h-5 w-5" /></span>}
+      {more ? "Ver menos" : `Ver más (${CATEGORIES.length - main.length})`}
+      {variant !== "tiles" && <LuChevronDown className={cx("h-4 w-4 transition", more && "rotate-180")} />}
+    </button>
+  );
+  const grid = variant === "chips" ? "flex flex-wrap gap-2" : variant === "tiles" ? "grid grid-cols-4 gap-2.5 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-6" : "grid grid-cols-2 gap-2 sm:grid-cols-3";
+  return <div className={grid} role="list" aria-label="Sectores">{list.map(item)}{CATEGORIES.length > main.length && moreBtn}</div>;
 }
 
 // ---------------------------------------------------------------------
