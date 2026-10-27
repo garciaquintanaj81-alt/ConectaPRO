@@ -97,7 +97,11 @@ interface ServerState {
 
 export type Phase = "cargando" | "sin-config" | "error" | "listo";
 export const LIVE = !!api.FRAME_AS;
-const DEMO_EMAILS: Record<string, string> = { u1: "daniela@conectapro.co", u2: "carlos@conectapro.co", u3: "juan@conectapro.co", u4: "andres@conectapro.co" };
+// Cuentas que usa cada "celular" del simulador: el escenario de prueba de desayunos sorpresa
+const SIM_EMAILS: Record<string, string> = {
+  c1: "prueba.cliente@conectapro.co", p1: "prueba.proveedor1@conectapro.co",
+  p2: "prueba.proveedor2@conectapro.co", p3: "prueba.proveedor3@conectapro.co",
+};
 
 type Ctx = ReturnType<typeof useStoreValue>;
 const StoreCtx = createContext<Ctx | null>(null);
@@ -135,7 +139,7 @@ function useStoreValue() {
     (async () => {
       try {
         setCatalog(await api.rpc("api_catalogo"));
-        if (LIVE && !api.getSession()) await loginDemoInternal(DEMO_EMAILS[api.FRAME_AS!] ?? DEMO_EMAILS.u1);
+        if (LIVE && !api.getSession()) await loginDemoInternal(SIM_EMAILS[api.FRAME_AS!] ?? SIM_EMAILS.c1, TEST_PASSWORD);
         if (api.getSession()) await refresh().catch(() => null);
         setPhase("listo");
       } catch (e: any) {

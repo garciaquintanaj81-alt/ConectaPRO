@@ -20,14 +20,14 @@ type Route = [string, (p: Record<string, string>) => JSX.Element];
 
 export default function App() {
   const path = useRoute();
-  const { session, mode, strikes, toastMsg, resetDemo, logout, phase, bootError, account, terms } = useStore();
+  const { session, mode, strikes, toastMsg, resetDemo, resetTests, logout, phase, bootError, account, terms } = useStore();
   const logged = !!session;
   const isPublic = path === "/" || path === "/login" || path === "/registro" || path === "/simulador" || path === "/legal" || path === "/pruebas";
 
   // El simulador le pide a esta pantalla reiniciar los datos de ejemplo
   useEffect(() => {
     const on = (e: MessageEvent) => {
-      if (e.data === "cp-reset-demo") resetDemo().catch(() => null).finally(() => window.parent?.postMessage("cp-reset-done", "*"));
+      if (e.data === "cp-reset-demo") resetTests().catch(() => null).finally(() => window.parent?.postMessage("cp-reset-done", "*"));
     };
     window.addEventListener("message", on);
     return () => window.removeEventListener("message", on);
