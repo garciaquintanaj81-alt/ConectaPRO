@@ -115,7 +115,8 @@ export function TermsGate() {
   const accept = async () => {
     if (!ok.terms || !ok.privacy) { setErr("Marca las dos casillas para continuar"); return; }
     setBusy(true); setErr("");
-    try { await acceptTerms(); navigate("/inicio", true); }
+    // Se queda en la pantalla que la persona estaba abriendo
+    try { await acceptTerms(); }
     catch (e: any) { setErr(e.message); }
     finally { setBusy(false); }
   };
@@ -151,14 +152,22 @@ export function TestAccounts() {
   const [list, setList] = useState<{ email: string; name: string; role: string; city: string }[] | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
   useEffect(() => { rpc("api_cuentas_prueba").then(setList).catch((e) => { setErr(e.message); setList([]); }); }, []);
-  const go = async (email: string) => {
-    setBusy(email); setErr("");
+  const go = async (email: string, isClient: boolean) => {
+    setBusy(email); setErr(""); setMsg("");
     try {
       if (session) await logout();
       await loginTest(email);
-      navigate("/inicio", true);
+      // El cliente va directo a publicar el desayuno sorpresa; los proveedores, a sus oportunidades
+      navigate(isClient ? "/publicar?servicio=desayunos_sorpresa" : "/oportunidades", true);
     } catch (e: any) { setErr(e.message); }
+    finally { setBusy(""); }
+  };
+  const limpiar = async () => {
+    setBusy("reset"); setErr(""); setMsg("");
+    try { await rpc("api_reiniciar_pruebas"); setMsg("Listo: el escenario quedó vacío. Empieza por el Paso 1."); }
+    catch (e: any) { setErr(e.message); }
     finally { setBusy(""); }
   };
   return (
@@ -172,27 +181,31 @@ export function TestAccounts() {
         <p className="mt-2 text-ink-soft">Escenario: una persona publica que necesita un <b className="text-ink">desayuno sorpresa</b> y tres proveedores se postulan con su propuesta y precio. Todo se guarda en la base de datos y <b className="text-ink">nadie responde automáticamente</b>: cada paso lo haces tú ingresando a cada cuenta (puedes usar varias pestañas o navegadores).</p>
         <div className="mt-4 rounded-2xl bg-[#fff4dc] p-4 text-sm text-[#7a4a00]">Estas cuentas solo se ven entre ellas: los usuarios reales nunca las ven y siempre llevan la etiqueta <TestBadge className="align-middle" />. Contraseña de las cuatro: <b>Prueba2026*</b></div>
         {account && <p className="mt-4 text-sm text-ink-soft">Sesión actual: <b className="text-ink">{account.name}</b>. Al elegir otra cuenta se cerrará esta sesión.</p>}
+        <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-white p-4 ring-1 ring-line sm:flex-row sm:items-center">
+          <p className="flex-1 text-sm text-ink-soft">El escenario se limpia solo cada vez que <b className="text-ink">Cliente Prueba</b> publica una necesidad. También puedes vaciarlo ahora.</p>
+          <Button variant="outline" className="shrink-0 px-4 py-2.5 text-sm" disabled={!!busy} onClick={limpiar}>{busy === "reset" ? "Limpiando…" : "Empezar de cero"}</Button>
+        </div>
+        {msg && <p className="mt-3 rounded-xl bg-ok-50 px-4 py-3 text-sm font-medium text-ok">{msg}</p>}
         {err && <p className="mt-4 rounded-xl bg-bad-50 px-4 py-3 text-sm font-medium text-bad">{err}</p>}
         <div className="mt-5 space-y-3">
           {list === null && [0, 1, 2, 3].map((i) => <div key={i} className="card h-20 animate-pulse" />)}
           {list?.map((a, i) => (
-            <button key={a.email} disabled={!!busy} onClick={() => go(a.email)} className="card flex w-full items-center gap-4 p-4 text-left transition hover:ring-brand/40 disabled:opacity-60">
+            <button key={a.email} disabled={!!busy} onClick={() => go(a.email, i === 0)} className="card flex w-full items-center gap-4 p-4 text-left transition hover:ring-brand/40 disabled:opacity-60">
               <Avatar name={a.name} size={52} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 font-extrabold">{a.name}<TestBadge /></div>
                 <div className="truncate text-sm text-ink-soft">{a.role} · {a.city}</div>
                 <div className="truncate text-xs text-ink-soft">{a.email}</div>
               </div>
-              <span className="text-sm font-bold text-brand">{busy === a.email ? "Ingresando…" : i === 0 ? "Paso 1" : "Ingresar"}</span>
+              <span className="shrink-0 text-sm font-bold text-brand">{busy === a.email ? "Ingresando…" : i === 0 ? "Paso 1 · Publicar" : "Paso 2 · Postularse"}</span>
             </button>
           ))}
           {list?.length === 0 && !err && <p className="card p-5 text-center text-ink-soft">Aún no se han creado las cuentas de prueba en la base de datos (ejecuta supabase/instalar.sql).</p>}
         </div>
         <ol className="card mt-6 list-decimal space-y-2 p-5 pl-10 text-sm text-ink-soft">
-          <li><b className="text-ink">Cliente Prueba</b> acepta los términos y publica la necesidad: sector <i>Eventos</i> → <i>Desayunos y detalles sorpresa</i>, en Cúcuta.</li>
-          <li>Cada <b className="text-ink">Proveedor Prueba</b> ve la oportunidad, escribe su precio y se postula.</li>
-          <li><b className="text-ink">Cliente Prueba</b> abre la solicitud, compara las tres ofertas y contrata una.</li>
-          <li>Para repetir la prueba: Mi perfil → Seguridad y privacidad → <i>Reiniciar escenario de prueba</i>.</li>
+          <li><b className="text-ink">Cliente Prueba</b> publica la necesidad: <i>Desayunos y detalles sorpresa</i> ya viene elegido. Al publicar se borra la prueba anterior.</li>
+          <li>Cada <b className="text-ink">Proveedor Prueba</b> (Dulce Despertar, Globos &amp; Café y Detalles Express) ve la oportunidad, escribe su precio y se postula.</li>
+          <li><b className="text-ink">Cliente Prueba</b> vuelve a ingresar, compara las tres ofertas con las fotos de los trabajos de cada uno y contrata la que prefiera.</li>
         </ol>
       </div>
     </div>

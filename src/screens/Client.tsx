@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LuSearch, LuSlidersHorizontal, LuChevronRight, LuMapPin, LuClock, LuCircleCheck, LuCrosshair, LuCircleDot,
   LuWallet, LuUsers, LuShieldCheck, LuMessageCircle, LuPhone, LuEllipsisVertical, LuWrench, LuBriefcase,
@@ -14,6 +14,7 @@ import {
   CATEGORY_ICON, localISO, PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, clock, cx, shortDate, timeAgo,
 } from "../ui";
 import { GPS_MSG, ZonaChip } from "../zona";
+import { Mapa, Punto, DireccionDetectada, direccionDe, comoLlegar } from "../mapa";
 import { CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById, servicesOf, categoryById } from "../data";
 import { availability, availabilityLabel, distanceKm, predictRoutines, scheduleLabel } from "../matching";
 import { rpc } from "../api";
@@ -297,8 +298,9 @@ export function Explore() {
 type Cercano = { codigo: string; nombre: string; departamento: string; departamentoNombre: string; distanciaKm: number };
 
 export function Publish() {
-  const { publishRequest, toast, strikes, zona, addresses } = useStore();
-  const pre = query().get("servicio") as ServiceId | null;
+  const { publishRequest, toast, strikes, zona, addresses, account } = useStore();
+  // Las cuentas de prueba siempre arrancan en "Desayunos y detalles sorpresa"
+  const pre = (query().get("servicio") as ServiceId | null) ?? (account?.test ? "desayunos_sorpresa" : null);
   const [cat, setCat] = useState<string>(pre ? serviceById(pre).category : "");
   const [service, setService] = useState<ServiceId>(pre ?? "");
   const [desc, setDesc] = useState(query().get("desc") ?? "");
@@ -306,7 +308,12 @@ export function Publish() {
   const [direccion, setDireccion] = useState("");
   const geo = useGeolocation();
   const [cercano, setCercano] = useState<Cercano | null>(null);
-  const [usarGps, setUsarGps] = useState(false);
+  // Punto exacto del servicio: ubicación actual (GPS) o marcado en el mapa
+  const [punto, setPunto] = useState<(Punto & { accuracy?: number | null; fuente: "gps" | "mapa" }) | null>(null);
+  const [munCenter, setMunCenter] = useState<Punto | null>(null);
+  const [detectada, setDetectada] = useState<DireccionDetectada | null>(null);
+  const [buscandoDir, setBuscandoDir] = useState(false);
+  const dirAuto = useRef(true);   // la dirección se llena sola mientras la persona no la escriba
   const [payment, setPayment] = useState<PaymentMethod>("efectivo");
   const [proposals, setProposals] = useState(true);
   const [placeModal, setPlaceModal] = useState(false);
@@ -320,26 +327,59 @@ export function Publish() {
     rpc<number>("api_vista_previa", { p_servicio: service, p_municipio: ubic.municipio }).then(setPreview).catch(() => setPreview(null));
   }, [service, ubic.municipio]);
 
-  // El GPS solo se usa si corresponde al municipio elegido
-  const gpsCoincide = !!cercano && cercano.codigo === ubic.municipio;
-  useEffect(() => { if (!gpsCoincide) setUsarGps(false); }, [gpsCoincide]);
+  // Centro del municipio elegido (para el mapa) y validación del punto
+  useEffect(() => {
+    if (!ubic.municipio) { setMunCenter(null); return; }
+    getMunicipios(ubic.departamento).then((l) => {
+      const m = l.find((x) => x.codigo === ubic.municipio);
+      if (!m) return;
+      setMunCenter({ lat: m.lat, lng: m.lng });
+      setPunto((p) => (p && distanceKm(p, m) > 25 ? null : p));
+    }).catch(() => null);
+  }, [ubic.municipio]);
+
+  // Si la persona ya activó su ubicación actual y está en este municipio, se usa de una vez
+  useEffect(() => {
+    if (zona?.fuente === "gps" && zona.lat != null && zona.municipio === ubic.municipio && !punto)
+      setPunto({ lat: zona.lat, lng: zona.lng!, accuracy: zona.accuracy ?? null, fuente: "gps" });
+  }, []);
+
+  // Dirección real a partir del punto
+  useEffect(() => {
+    if (!punto) { setDetectada(null); return; }
+    let alive = true;
+    setBuscandoDir(true);
+    const t = setTimeout(() => direccionDe(punto).then((d) => {
+      if (!alive) return;
+      setDetectada(d); setBuscandoDir(false);
+      if (d?.completa && (dirAuto.current || !direccion.trim())) { setDireccion(d.completa); dirAuto.current = true; setErr((e) => ({ ...e, direccion: "" })); }
+    }), 400);
+    return () => { alive = false; clearTimeout(t); };
+  }, [punto?.lat, punto?.lng]);
 
   const pedirGps = async () => {
     const f = await geo.request();
     if (!f) return;
     try {
       const m = await rpc<Cercano>("api_municipio_cercano", { p_lat: f.lat, p_lng: f.lng });
-      setCercano(m);
-      if (m.codigo === ubic.municipio) setUsarGps(true);
+      if (!ubic.municipio || m.codigo === ubic.municipio) {
+        await getMunicipios(m.departamento);
+        setUbic({ departamento: m.departamento, municipio: m.codigo });
+        setPunto({ lat: f.lat, lng: f.lng, accuracy: f.accuracy, fuente: "gps" });
+        setCercano(null);
+        setErr({ ...err, departamento: "", municipio: "" });
+      } else setCercano(m);
     } catch { toast("No pudimos identificar el municipio de tu ubicación"); }
   };
   const usarMunicipioGps = async () => {
-    if (!cercano) return;
+    if (!cercano || !geo.fix) return;
     await getMunicipios(cercano.departamento);
     setUbic({ departamento: cercano.departamento, municipio: cercano.codigo });
-    setUsarGps(true);
+    setPunto({ lat: geo.fix.lat, lng: geo.fix.lng, accuracy: geo.fix.accuracy, fuente: "gps" });
+    setCercano(null);
     setErr({ ...err, departamento: "", municipio: "" });
   };
+  const puntoValido = !!punto && !!munCenter && distanceKm(punto, munCenter) <= 25;
 
   const submit = () => wrap(async () => {
     if (strikes >= 3) { toast("Tu cuenta está suspendida por acumular 3 faltas graves"); return; }
@@ -351,8 +391,8 @@ export function Publish() {
     if (direccion.trim().length < 5) e.direccion = "Escribe la dirección donde se prestará el servicio";
     setErr(e);
     if (Object.keys(e).length) { document.querySelector("[data-err]")?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
-    const gps = usarGps && gpsCoincide && geo.fix ? geo.fix : null;
-    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, lat: gps?.lat, lng: gps?.lng, precision: gps?.accuracy, direccion: direccion.trim(), payment, wantsProposals: proposals });
+    const pt = puntoValido ? punto : null;
+    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, lat: pt?.lat, lng: pt?.lng, precision: pt?.accuracy ?? null, direccion: direccion.trim(), payment, wantsProposals: proposals });
     navigate("/buscando/" + r.id);
   });
 
@@ -424,35 +464,43 @@ export function Publish() {
             {step(3, "¿Dónde se prestará el servicio?", !!ubic.municipio && direccion.trim().length >= 5)}
             <UbicacionSelect variant="compact" value={ubic} onChange={(v) => { setUbic(v); setErr({ ...err, departamento: "", municipio: "" }); }} />
             {errText("departamento") || errText("municipio")}
+            <div className="mt-3 flex flex-col gap-3 rounded-xl bg-surface p-3.5 text-sm sm:flex-row sm:items-center">
+              <p className="flex min-w-0 flex-1 items-start gap-2.5 text-ink-soft"><LuLocateFixed className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
+                {punto?.fuente === "gps" ? `Usando tu ubicación actual (±${punto.accuracy ?? "?"} m). Puedes mover el marcador si el servicio es en otro punto.` : "Usa tu ubicación actual o toca el mapa para marcar el lugar exacto del servicio."}</p>
+              <Button variant="soft" className="shrink-0 rounded-xl px-4 py-2 text-sm" disabled={geo.status === "pidiendo"} onClick={pedirGps}>{geo.status === "pidiendo" ? "Ubicando…" : punto?.fuente === "gps" ? "Actualizar ubicación" : "Usar mi ubicación actual"}</Button>
+              {GEO_MSG[geo.status] && geo.status !== "pidiendo" && <p className="w-full text-xs text-bad">{GEO_MSG[geo.status]}</p>}
+            </div>
+            {cercano && (
+              <div className="mt-3 space-y-2 rounded-xl bg-[#fff4dc] p-3.5 text-sm">
+                <p>Tu ubicación actual está en <b>{cercano.nombre}, {cercano.departamentoNombre}</b>, que no es el municipio elegido.</p>
+                <div className="flex gap-2">
+                  <Button variant="soft" className="rounded-xl px-4 py-2 text-sm" onClick={usarMunicipioGps}>Usar {cercano.nombre}</Button>
+                  <Button variant="ghost" className="rounded-xl px-3 py-2 text-sm" onClick={() => { geo.clear(); setCercano(null); }}>Mantener el municipio elegido</Button>
+                </div>
+              </div>
+            )}
+            {munCenter && (
+              <Mapa className="mt-3 h-64 sm:h-72" center={munCenter} point={punto} accuracy={punto?.fuente === "gps" ? punto.accuracy : null} editable
+                onPick={(p) => setPunto({ ...p, accuracy: null, fuente: punto?.fuente === "gps" ? "gps" : "mapa" })} />
+            )}
+            {punto && (
+              <div className="mt-2 flex items-start gap-2 text-sm" data-testid="ubicacion-detectada">
+                <LuMapPin className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+                <div className="min-w-0 flex-1">
+                  <b>{buscandoDir ? "Buscando la dirección…" : detectada?.completa || "Punto marcado en el mapa"}</b>
+                  <span className="text-ink-soft"> · {detectada?.ciudad || cercano?.nombre || ""} {punto.lat.toFixed(5)}, {punto.lng.toFixed(5)}</span>
+                  {!puntoValido && munCenter && <div className="text-xs font-semibold text-bad">Este punto está a más de 25 km del municipio elegido; no se usará.</div>}
+                </div>
+                <button className="shrink-0 text-xs font-semibold text-ink-soft hover:text-bad" onClick={() => { setPunto(null); geo.clear(); }}>Quitar punto</button>
+              </div>
+            )}
             <div className="mt-3 flex gap-2">
-              <input name="direccion" value={direccion} onChange={(e) => { setDireccion(e.target.value); setErr({ ...err, direccion: "" }); }}
+              <input name="direccion" value={direccion} onChange={(e) => { setDireccion(e.target.value); dirAuto.current = false; setErr({ ...err, direccion: "" }); }}
                 placeholder="Dirección y barrio *" className={cx(inputCls2, err.direccion && "ring-2 ring-bad/50")} />
               {addresses.length > 0 && <Button variant="outline" className="shrink-0 rounded-xl px-4 text-sm" onClick={() => setPlaceModal(true)}>Guardadas</Button>}
             </div>
             {errText("direccion")}
-
-            <div className="mt-4 rounded-xl bg-surface p-3.5 text-sm">
-              {!geo.fix ? (
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <p className="flex min-w-0 flex-1 items-start gap-2.5 text-ink-soft"><LuLocateFixed className="mt-0.5 h-5 w-5 shrink-0 text-brand" />Opcional: comparte tu ubicación actual para que te contacten primero los proveedores más cercanos.</p>
-                  <Button variant="soft" className="shrink-0 rounded-xl px-4 py-2 text-sm" disabled={geo.status === "pidiendo"} onClick={pedirGps}>{geo.status === "pidiendo" ? "Ubicando…" : "Usar mi ubicación"}</Button>
-                  {GEO_MSG[geo.status] && <p className="w-full text-xs text-bad">{GEO_MSG[geo.status]}</p>}
-                </div>
-              ) : cercano && gpsCoincide ? (
-                <label className="flex cursor-pointer items-start gap-3">
-                  <input type="checkbox" checked={usarGps} onChange={(e) => setUsarGps(e.target.checked)} className="mt-0.5 h-5 w-5 accent-brand" />
-                  <span><b>Usar mi ubicación GPS como punto exacto</b> (±{geo.fix.accuracy} m, dentro de {cercano.nombre}). El municipio sigue siendo {cercano.nombre}; el GPS solo mejora el cálculo de cercanía.</span>
-                </label>
-              ) : cercano ? (
-                <div className="space-y-2">
-                  <p>Tu ubicación actual parece estar en <b>{cercano.nombre}, {cercano.departamentoNombre}</b>, que no coincide con el municipio elegido. No la usaremos a menos que cambies el municipio.</p>
-                  <div className="flex gap-2">
-                    <Button variant="soft" className="rounded-xl px-4 py-2 text-sm" onClick={usarMunicipioGps}>Usar {cercano.nombre}</Button>
-                    <Button variant="ghost" className="rounded-xl px-3 py-2 text-sm" onClick={() => { geo.clear(); setCercano(null); }}>Descartar GPS</Button>
-                  </div>
-                </div>
-              ) : <p className="text-ink-soft">Ubicando municipio…</p>}
-            </div>
+            <p className="mt-2 text-xs text-ink-soft">{punto ? "La dirección se llenó con tu ubicación; revísala y complétala (apartamento, torre, referencias). " : ""}Los proveedores solo ven una zona aproximada; la dirección y el punto exacto solo los ve el proveedor que contrates.</p>
           </section>
 
           {/* 4. Pago */}
@@ -493,7 +541,7 @@ export function Publish() {
       <Modal open={placeModal} onClose={() => setPlaceModal(false)} title="Mis direcciones guardadas">
         <div className="space-y-2">
           {addresses.map((p) => (
-            <button key={p.id} onClick={async () => { await getMunicipios(p.departamento); setUbic({ departamento: p.departamento, municipio: p.municipio }); setDireccion(p.address); setPlaceModal(false); setErr({}); }}
+            <button key={p.id} onClick={async () => { await getMunicipios(p.departamento); setUbic({ departamento: p.departamento, municipio: p.municipio }); setDireccion(p.address); dirAuto.current = false; setPlaceModal(false); setErr({}); }}
               className="flex w-full items-center gap-3 rounded-xl p-3 text-left ring-1 ring-line hover:bg-surface">
               <LuMapPin className="h-5 w-5 text-brand" />
               <div><div className="font-semibold">{p.name}</div><div className="text-sm text-ink-soft">{p.address} · {p.label}</div></div>
@@ -620,7 +668,7 @@ export function CompatibleProviders({ id }: { id: string }) {
             <tbody className="divide-y divide-line">
               {rows.map(({ a, p, d }) => (
                 <tr key={p.id}>
-                  <td className="px-4 py-3"><div className="flex items-center gap-2 font-semibold"><Avatar name={p.name} photo={p.photo} size={32} />{p.name}{p.test && <TestBadge />}</div></td>
+                  <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={p.name} photo={p.photo} size={36} /><div><div className="flex flex-wrap items-center gap-1.5 font-semibold">{p.company}{p.test && <TestBadge />}</div><div className="text-xs text-ink-soft">{p.name}</div></div></div></td>
                   <td className="px-4 py-3 font-extrabold">{money(a.price)}{a.price === minPrice && <Badge tone="ok" className="ml-2 px-2 py-0.5 text-[11px]">Menor</Badge>}</td>
                   <td className="px-4 py-3"><Rating value={p.rating} count={p.reviews} /></td>
                   <td className="px-4 py-3 text-ink-soft">{d.toFixed(1)} km</td>
@@ -638,7 +686,8 @@ export function CompatibleProviders({ id }: { id: string }) {
             <div className="flex gap-4">
               <Avatar name={p.name} photo={p.photo} size={88} dot={av === "ahora" ? "on" : "away"} />
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-1.5 text-xl font-extrabold">{p.name}{p.test && <TestBadge />}</div>
+                <div className="flex flex-wrap items-center gap-1.5 text-xl font-extrabold">{p.company}{p.test && <TestBadge />}</div>
+                <div className="text-sm text-ink-soft">{p.name} · {p.profession}</div>
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                   <Rating value={p.rating} count={p.reviews} />
                   <span className="inline-flex items-center gap-1 text-ink-soft"><LuMapPin className="h-4 w-4" />A {d.toFixed(1)} km</span>
@@ -651,6 +700,11 @@ export function CompatibleProviders({ id }: { id: string }) {
               </div>
             </div>
             {a.note && <p className="mt-3 rounded-2xl bg-surface p-3 text-sm text-ink-soft">“{a.note}”</p>}
+            {p.portfolio.length > 0 && (
+              <button type="button" onClick={() => navigate(`/proveedor/${p.id}?sol=${r.id}`)} className="mt-3 grid w-full grid-cols-3 gap-1.5" aria-label={`Ver trabajos de ${p.name}`}>
+                {p.portfolio.slice(0, 3).map((src) => <img key={src} src={src} alt="Trabajo del proveedor" className="aspect-[4/3] w-full rounded-lg object-cover" />)}
+              </button>
+            )}
             <div className="mt-4 grid grid-cols-2 gap-2">
               <Button variant="soft" onClick={() => navigate(`/proveedor/${p.id}?sol=${r.id}`)}>Ver perfil</Button>
               {r.status === "buscando" ? <Button onClick={() => navigate(`/acuerdo/${r.id}/${p.id}`)}>Elegir</Button> : <span />}
@@ -674,6 +728,7 @@ export function ProviderProfile({ id }: { id: string }) {
   const r = sol ? findRequest(sol) : undefined;
   const [tab, setTab] = useState<"info" | "portafolio" | "resenas">(r ? "portafolio" : "info");
   const [phone, setPhone] = useState(false);
+  const [zoomImg, setZoomImg] = useState<string | null>(null);
   const [full, setFull] = useState<Provider | null>(null);
   const [state, setState] = useState<"cargando" | "listo" | "error">("cargando");
   // Datos completos del proveedor (incluye reseñas) desde la base de datos
@@ -707,6 +762,10 @@ export function ProviderProfile({ id }: { id: string }) {
       ].map(([I, t, v]: any) => (
         <div key={t} className="flex items-start gap-5"><I className="mt-0.5 h-7 w-7 shrink-0" /><div><div className="font-bold">{t}</div><div className="text-ink-soft">{v}</div></div></div>
       ))}
+      <div>
+        <Mapa className="h-48" center={p} point={p} approx={!p.exactLocation} zoom={p.exactLocation ? 15 : 13} />
+        <p className="mt-1.5 text-xs text-ink-soft">{p.exactLocation ? "Punto de atención del proveedor." : "Zona aproximada: el proveedor no ha autorizado mostrar su ubicación exacta."} Atiende hasta {p.coverageKm} km a la redonda.</p>
+      </div>
       <div className="border-t border-line pt-4">
         <div className="text-lg font-bold">Sobre mí</div>
         <p className="mt-1 text-ink-soft">{p.about}</p>
@@ -715,9 +774,27 @@ export function ProviderProfile({ id }: { id: string }) {
   );
   const portfolio = (
     <div>
+      {app && (
+        <div className="mb-5 rounded-2xl bg-brand-50 p-4">
+          <div className="text-sm font-semibold text-brand">Su propuesta para tu solicitud</div>
+          <div className="text-3xl font-extrabold">{money(app.price)}</div>
+          {app.note && <p className="mt-1 text-ink-soft">“{app.note}”</p>}
+        </div>
+      )}
       {p.portfolio.length > 0 ? (
-        <div className="grid grid-cols-3 gap-3">{p.portfolio.map((src) => <img key={src} src={src} alt="Trabajo realizado" className="aspect-[1.1] w-full rounded-2xl object-cover" />)}</div>
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{p.portfolio.map((src) => (
+            <button key={src} type="button" onClick={() => setZoomImg(src)} className="overflow-hidden rounded-2xl" aria-label="Ampliar foto">
+              <img src={src} alt="Trabajo realizado" className="aspect-[4/3] w-full object-cover transition hover:scale-105" />
+            </button>
+          ))}</div>
+          {p.test && <p className="mt-2 text-xs text-ink-soft">Cuenta de prueba: las imágenes son ilustrativas.</p>}
+        </>
       ) : <p className="rounded-2xl bg-surface p-4 text-sm text-ink-soft">Este proveedor aún no ha subido fotos de sus trabajos.</p>}
+      <div className="mt-5 flex flex-wrap gap-2 text-sm">
+        <Badge tone="soft">Precios: {money(p.priceMin)} – {money(p.priceMax)}</Badge>
+        <Badge tone="soft">{scheduleLabel(p.schedule)}</Badge>
+      </div>
       <div className="mt-6 text-lg font-bold">Servicios que ofrece</div>
       <ul className="mt-3 space-y-3">
         {p.offers.map((o) => <li key={o} className="flex items-center gap-3 text-ink-soft"><LuCheck className="h-6 w-6 text-brand" strokeWidth={2.5} />{o}</li>)}
@@ -755,8 +832,9 @@ export function ProviderProfile({ id }: { id: string }) {
         <div className="text-center lg:card lg:self-start lg:p-8">
           <Avatar name={p.name} photo={p.photo} size={176} verified={p.verified} className="mx-auto" />
           <h1 className="mt-3 text-3xl font-extrabold tracking-tight">{p.name}</h1>
+          <div className="text-lg font-semibold text-brand">{p.company}</div>
           {p.test && <TestBadge className="mt-1" />}
-          <div className="mt-1"><Rating value={p.rating} count={p.reviews} className="text-lg" /> <span className="text-ink-soft">reseñas</span></div>
+          <div className="mt-1"><Rating value={p.rating} count={p.reviews} className="text-lg" />{p.reviews > 0 && <span className="text-ink-soft"> reseñas</span>}</div>
           {p.verified && <Badge tone="ok" icon={LuCircleCheck} className="mt-2 px-4 py-1.5 text-base">Verificado</Badge>}
           <div className="mt-3 flex flex-wrap justify-center gap-2">
             <Badge tone="brand" icon={LuMapPin} className="px-4 py-2 text-base">{d != null ? `${app ? "A" : "≈"} ${d.toFixed(1)} km` : p.city.split(",")[0]}</Badge>
@@ -798,6 +876,10 @@ export function ProviderProfile({ id }: { id: string }) {
         </div>
       )}
 
+      <Modal open={!!zoomImg} onClose={() => setZoomImg(null)} title={p.company}>
+        {zoomImg && <img src={zoomImg} alt="Trabajo realizado" className="w-full rounded-2xl" />}
+        <Button className="mt-4 w-full" onClick={() => setZoomImg(null)}>Cerrar</Button>
+      </Modal>
       <Modal open={phone} onClose={() => setPhone(false)} title={`Llamar a ${p.name.split(" ")[0]}`}>
         <p className="text-ink-soft">Llamarás al número que el proveedor registró en ConectaPRO desde el teléfono de tu dispositivo. Te recomendamos acordar los detalles por el chat para que quede registro.</p>
         <div className="mt-4 rounded-2xl bg-surface p-4 text-center text-2xl font-extrabold tracking-wide">+57 {p.phone.replace(/\d{4}$/, "••••")}</div>
@@ -1083,6 +1165,7 @@ export function RequestDetail({ id }: { id: string }) {
             {r.agreement && <Info icon={LuClock} k="Fecha pactada" v={agreementWhen(r.agreement.date, r.agreement.time) + (r.agreement.extendedDays ? ` (+${r.agreement.extendedDays} días)` : "")} />}
             {r.agreement && <Info icon={LuCircleDollarSign} k="Costo acordado" v={money(r.agreement.price)} />}
           </dl>
+          <Mapa className="mt-5 h-56" center={r.location} point={r.location} zoom={r.gps ? 16 : 14} />
           {r.punctualityPenalty && <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[#fff4dc] p-3 text-sm font-medium text-[#9a5b00]"><LuTriangleAlert className="h-5 w-5" /> Se otorgó un plazo adicional de 2 días y se registró una valoración negativa de puntualidad al proveedor.</div>}
           {r.rating && (
             <div className="mt-5 rounded-2xl ring-1 ring-line p-4">

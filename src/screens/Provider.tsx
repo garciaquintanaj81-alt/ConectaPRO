@@ -16,6 +16,7 @@ import { UbicacionSelect, useGeolocation, GEO_MSG } from "../geo";
 import { useBusy } from "../store";
 import { distanceKm, scheduleLabel } from "../matching";
 import { ContractModal, Info } from "./Client";
+import { Mapa, comoLlegar } from "../mapa";
 
 // =====================================================================
 //  Inicio (proveedor): "Hola, Carlos — Aquí están tus oportunidades"
@@ -209,7 +210,8 @@ export function OpportunityDetail({ id }: { id: string }) {
           </div>
           <h1 className="mt-5 text-2xl font-extrabold">{r.title}</h1>
           <p className="mt-2 text-lg text-ink-soft">{r.desc}</p>
-          <div className="mt-5 flex items-start gap-3 rounded-2xl bg-surface p-4">
+          <Mapa className="mt-5 h-52" center={r.location} point={r.location} approx={!!r.location.approximate} />
+          <div className="mt-3 flex items-start gap-3 rounded-2xl bg-surface p-4">
             <LuMapPin className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
             <div><div className="font-semibold">{r.location.label}</div>
               <div className="text-sm text-ink-soft">{r.location.approximate && !mine ? "Zona aproximada. La dirección exacta solo se comparte con el proveedor que el cliente contrate." : "Dirección del servicio"}</div></div>
@@ -315,6 +317,8 @@ export function JobDetail({ id }: { id: string }) {
             {r.agreement && <Info icon={LuCalendarDays} k="Fecha pactada" v={agreementWhen(r.agreement.date, r.agreement.time) + (r.agreement.extendedDays ? ` (+${r.agreement.extendedDays} días)` : "")} />}
             {r.agreement && <Info icon={LuCircleDollarSign} k="Valor" v={money(r.agreement.price)} />}
           </dl>
+          <Mapa className="mt-5 h-56" center={r.location} point={r.location} approx={!!r.location.approximate} />
+          {!r.location.approximate && <a href={comoLlegar(r.location)} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 rounded-xl bg-brand-50 px-4 py-2.5 text-sm font-bold text-brand"><LuMapPin className="h-4 w-4" />Cómo llegar (Google Maps)</a>}
           {r.punctualityPenalty && <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[#fff4dc] p-3 text-sm font-medium text-[#9a5b00]"><LuTriangleAlert className="h-5 w-5" /> El cliente reportó un retraso: tienes 2 días adicionales y se registró una valoración negativa de puntualidad.</div>}
           {r.rating && <div className="mt-5 rounded-2xl p-4 ring-1 ring-line"><div className="text-sm font-bold text-ink-soft">Calificación del cliente</div><Stars value={r.rating.stars} /><p className="mt-1 text-ink-soft">{r.rating.comment}</p></div>}
           {r.clientRating && <div className="mt-3 rounded-2xl p-4 ring-1 ring-line"><div className="text-sm font-bold text-ink-soft">Tu calificación al cliente</div><Stars value={r.clientRating.stars} /></div>}

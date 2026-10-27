@@ -76,7 +76,13 @@ Nadie responde automáticamente en ningún mundo: cada postulación, mensaje o c
 | prueba.proveedor2@conectapro.co | Proveedor de desayunos sorpresa (Villa del Rosario) |
 | prueba.proveedor3@conectapro.co | Proveedor de desayunos sorpresa (Los Patios) |
 
-Escenario: el cliente publica en *Eventos → Desayunos y detalles sorpresa*; los 3 proveedores ven la oportunidad y se postulan con su precio; el cliente compara las 3 ofertas y contrata una. Para repetirlo: *Mi perfil → Seguridad y privacidad → Reiniciar escenario de prueba*.
+Los proveedores de prueba son **Dulce Despertar** (clásico y saludable), **Globos & Café** (premium con decoración) y **Detalles Express** (económico y anchetas), cada uno con su descripción, servicios, precios y portafolio (imágenes ilustrativas en `public/img/pruebas`).
+
+Escenario: el cliente entra directo a publicar con *Desayunos y detalles sorpresa* ya elegido; los 3 proveedores ven la oportunidad y se postulan con su precio; el cliente compara las 3 ofertas con las fotos de los trabajos y contrata una. **Cada vez que el cliente de prueba publica, el escenario anterior se borra solo**; también se puede vaciar con *Empezar de cero* en `#/pruebas`.
+
+### Mapas
+
+Los mapas usan [Leaflet](https://leafletjs.com) (incluido en `public/vendor/leaflet`, licencia BSD-2) con mosaicos de © OpenStreetMap. Al publicar se puede usar la ubicación actual o tocar el mapa para marcar el punto exacto; la dirección se completa sola con el servicio de direcciones de OpenStreetMap (Nominatim) y se puede editar. Los proveedores no contratados ven solo un círculo aproximado.
 
 **Simulador** (contraseña `Conecta2026*`): daniela@conectapro.co y juan@conectapro.co (clientes), carlos@conectapro.co y andres@conectapro.co (proveedores), con 68 proveedores de ejemplo en 13 municipios.
 

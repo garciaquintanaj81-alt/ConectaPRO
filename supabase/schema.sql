@@ -1026,6 +1026,10 @@ begin
   perform cp_requiere_terminos(yo);
   perform cp_no_suspendido(yo);
   if length(trim(coalesce(p_descripcion, ''))) < 10 then raise exception 'Describe tu necesidad (mínimo 10 caracteres)'; end if;
+  -- Cuentas de prueba: cada publicación empieza el escenario desde cero (no se acumulan datos viejos)
+  if v_mundo = 'prueba' and to_regproc('cp_reiniciar_pruebas') is not null then
+    execute 'select cp_reiniciar_pruebas()';
+  end if;
   if length(p_descripcion) > 500 then raise exception 'La descripción no puede superar 500 caracteres'; end if;
   select nombre into v_serv from servicios where id = p_servicio;
   if v_serv is null then raise exception 'Selecciona una categoría de servicio válida'; end if;

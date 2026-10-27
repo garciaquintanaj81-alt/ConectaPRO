@@ -12,6 +12,7 @@ import { LuMapPin, LuLocateFixed, LuChevronDown, LuShieldCheck, LuHouse, LuRadio
 import { useStore } from "./store";
 import { Button, Modal, cx } from "./ui";
 import { UbicacionSelect, useDepartamentos } from "./geo";
+import { Mapa } from "./mapa";
 
 export const GPS_MSG: Record<string, string> = {
   pidiendo: "Solicitando permiso de ubicación…",
@@ -71,6 +72,7 @@ export function ZonaModal({ open, onClose }: { open: boolean; onClose: () => voi
         )}
       </div>
 
+      {zona.fuente === "gps" && zona.lat != null && <Mapa className="mt-3 h-44" center={{ lat: zona.lat, lng: zona.lng! }} point={{ lat: zona.lat, lng: zona.lng! }} accuracy={zona.accuracy} zoom={15} />}
       <Button className="mt-4 w-full" icon={LuLocateFixed} disabled={busy || gpsState === "pidiendo"} onClick={gps}>
         {busy || gpsState === "pidiendo" ? "Ubicando…" : zona.fuente === "gps" ? "Actualizar mi ubicación" : "Usar mi ubicación actual"}
       </Button>

@@ -360,6 +360,9 @@
   .left-7 {
     left: calc(var(--spacing) * 7);
   }
+  .z-0 {
+    z-index: 0;
+  }
   .z-10 {
     z-index: 10;
   }
@@ -504,11 +507,11 @@
   .table {
     display: table;
   }
-  .aspect-\[1\.1\] {
-    aspect-ratio: 1.1;
-  }
   .aspect-\[3\/4\] {
     aspect-ratio: 3/4;
+  }
+  .aspect-\[4\/3\] {
+    aspect-ratio: 4/3;
   }
   .aspect-square {
     aspect-ratio: 1 / 1;
@@ -573,8 +576,14 @@
   .h-32 {
     height: calc(var(--spacing) * 32);
   }
+  .h-44 {
+    height: calc(var(--spacing) * 44);
+  }
   .h-48 {
     height: calc(var(--spacing) * 48);
+  }
+  .h-52 {
+    height: calc(var(--spacing) * 52);
   }
   .h-56 {
     height: calc(var(--spacing) * 56);
@@ -2090,6 +2099,12 @@
       --tw-translate-y: calc(var(--spacing) * -0.5);
       translate: var(--tw-translate-x) var(--tw-translate-y);
     }
+    .hover\:scale-105:hover {
+      --tw-scale-x: 105%;
+      --tw-scale-y: 105%;
+      --tw-scale-z: 105%;
+      scale: var(--tw-scale-x) var(--tw-scale-y);
+    }
     .hover\:scale-110:hover {
       --tw-scale-x: 110%;
       --tw-scale-y: 110%;
@@ -2129,6 +2144,9 @@
     }
     .hover\:bg-white:hover {
       background-color: var(--color-white);
+    }
+    .hover\:text-bad:hover {
+      color: var(--color-bad);
     }
     .hover\:text-brand:hover {
       color: var(--color-brand);
@@ -2223,6 +2241,9 @@
     }
     .sm\:h-28 {
       height: calc(var(--spacing) * 28);
+    }
+    .sm\:h-72 {
+      height: calc(var(--spacing) * 72);
     }
     .sm\:w-28 {
       width: calc(var(--spacing) * 28);
