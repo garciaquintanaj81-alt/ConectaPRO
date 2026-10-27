@@ -10,6 +10,7 @@ import { build, context } from "esbuild";
 import { compile } from "tailwindcss";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -63,6 +64,20 @@ function copyStatic() {
   fs.writeFileSync(path.join(OUT, ".nojekyll"), "");
 }
 
+// Agrega ?v=<huella> a app.js, app.css y config.js en index.html y 404.html: cada versión
+// publicada tiene una URL distinta y el navegador no se queda con la versión anterior.
+function versionAssets() {
+  const h = (f) => crypto.createHash("sha1").update(fs.readFileSync(path.join(OUT, f))).digest("hex").slice(0, 10);
+  for (const page of ["index.html", "404.html"]) {
+    const f = path.join(OUT, page);
+    const html = fs.readFileSync(f, "utf8")
+      .replace(/assets\/app\.js(\?v=\w+)?/, "assets/app.js?v=" + h("assets/app.js"))
+      .replace(/assets\/app\.css(\?v=\w+)?/, "assets/app.css?v=" + h("assets/app.css"))
+      .replace(/"config\.js(\?v=\w+)?"/, '"config.js?v=' + h("config.js") + '"');
+    fs.writeFileSync(f, html);
+  }
+}
+
 const esbuildOptions = {
   entryPoints: [path.join(ROOT, "src/main.tsx")],
   bundle: true,
@@ -88,5 +103,6 @@ if (watch) {
 } else {
   await build(esbuildOptions);
   await buildCss();
+  versionAssets();
   console.log("Compilación lista en /docs");
 }
