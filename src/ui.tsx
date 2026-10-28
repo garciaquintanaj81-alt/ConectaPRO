@@ -89,7 +89,7 @@ export function Avatar({ name, photo, size = 48, dot, verified, className }: { n
       )}
       {dot && <span className={cx("absolute bottom-[4%] right-[4%] rounded-full ring-[3px] ring-white", dot === "on" ? "bg-ok" : "bg-warn")} style={{ width: Math.max(10, size * 0.17), height: Math.max(10, size * 0.17) }} />}
       {verified && (
-        <span className="absolute bottom-[2%] right-[2%] flex items-center justify-center rounded-full bg-brand text-white ring-[3px] ring-white" style={{ width: size * 0.22, height: size * 0.22 }}>
+        <span className="absolute bottom-[2%] right-[2%] flex items-center justify-center rounded-full bg-[#eab308] text-white ring-[3px] ring-white" style={{ width: size * 0.22, height: size * 0.22 }}>
           <LuCheck style={{ width: size * 0.13, height: size * 0.13 }} strokeWidth={3.5} />
         </span>
       )}
@@ -122,7 +122,7 @@ export function Stars({ value, size = 16, onChange }: { value: number; size?: nu
 
 export function Rating({ value, count, className }: { value: number; count?: number; className?: string }) {
   // Sin reseñas no se muestra un puntaje inventado
-  if (count === 0) return <span className={cx("inline-flex shrink-0 items-center gap-1 font-semibold text-ink-soft", className)}><LuStar className="h-[1.1em] w-[1.1em] text-[#c9cfe0]" /> <span title="Aún no tiene reseñas">Nuevo</span></span>;
+  if (count === 0) return <span className={cx("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.85em] font-semibold", TONE.insignia, className)} title="Aún no tiene reseñas"><LuStar className="h-[1em] w-[1em]" />Nuevo</span>;
   return (
     <span className={cx("inline-flex items-center gap-1 font-bold text-[#8a5a00]", className)}>
       <LuStar className="h-[1.1em] w-[1.1em] fill-star text-star" /> {value.toFixed(1)}
@@ -131,7 +131,16 @@ export function Rating({ value, count, className }: { value: number; count?: num
   );
 }
 
-export function Badge({ tone = "brand", children, icon: Icon, className }: { tone?: "brand" | "ok" | "bad" | "warn" | "soft" | "solidOk"; children: ReactNode; icon?: IconType; className?: string }) {
+// Colores de la plataforma (usar siempre los mismos):
+//   · Postulaciones → verde   · Insignias → amarillo   · Completado → morado
+export const TONE = {
+  postulacion: "bg-[#e7f6ec] text-[#166534] ring-1 ring-[#bbe5c8]",
+  insignia: "bg-[#fef3c7] text-[#854d0e] ring-1 ring-[#f6dc8f]",
+  completado: "bg-[#f3e8ff] text-[#6b21a8] ring-1 ring-[#e0c8fb]",
+} as const;
+export const DOT = { postulacion: "bg-[#16a34a]", insignia: "bg-[#eab308]", completado: "bg-[#9333ea]" } as const;
+
+export function Badge({ tone = "brand", children, icon: Icon, className }: { tone?: "brand" | "ok" | "bad" | "warn" | "soft" | "solidOk" | "postulacion" | "insignia" | "completado"; children: ReactNode; icon?: IconType; className?: string }) {
   const t = {
     brand: "bg-brand-50 text-brand",
     ok: "bg-ok-50 text-ok",
@@ -139,6 +148,7 @@ export function Badge({ tone = "brand", children, icon: Icon, className }: { ton
     warn: "bg-[#fff4dc] text-[#b45309]",
     soft: "bg-surface text-ink-soft",
     solidOk: "bg-[#4cb963] text-white",
+    ...TONE,
   }[tone];
   return (
     <span className={cx("inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] font-semibold", t, className)}>
@@ -151,7 +161,7 @@ export function Badge({ tone = "brand", children, icon: Icon, className }: { ton
 /** Etiqueta visible en las cuentas de prueba (QA) para no confundirlas con usuarios reales */
 export function TestBadge({ className }: { className?: string }) {
   return (
-    <span className={cx("inline-flex items-center gap-1 rounded-full bg-[#fff4dc] px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-[#9a5b00] ring-1 ring-[#f5d58a]", className)} title="Cuenta de prueba: no es un usuario real">
+    <span className={cx("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide", TONE.insignia, className)} title="Cuenta de prueba: no es un usuario real">
       <LuFlaskConical className="h-3 w-3" /> Cuenta de prueba
     </span>
   );
@@ -254,6 +264,24 @@ export function Field({ icon: Icon, label, children, trailing, className }: { ic
 }
 
 export const inputCls = "w-full bg-transparent text-[15px] text-ink placeholder:text-ink-soft/70 outline-none";
+
+/**
+ * Campo de dinero: puede quedar vacío (no muestra 0), acepta solo números y los
+ * muestra con separador de miles (80.000).
+ */
+export function MoneyInput({ value, onChange, placeholder = "Ej. 80.000", className, name, ariaLabel, autoFocus }: {
+  value: number | null; onChange: (v: number | null) => void; placeholder?: string; className?: string; name?: string; ariaLabel?: string; autoFocus?: boolean;
+}) {
+  return (
+    <div className={cx("flex items-center rounded-2xl bg-surface px-4 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50", className)}>
+      <span className="text-lg font-bold text-ink-soft">$</span>
+      <input type="text" inputMode="numeric" name={name} aria-label={ariaLabel} autoFocus={autoFocus} placeholder={placeholder}
+        value={value == null ? "" : value.toLocaleString("es-CO")}
+        onChange={(e) => { const d = e.target.value.replace(/\D/g, "").slice(0, 9); onChange(d ? Number(d) : null); }}
+        className="w-full bg-transparent px-2 py-3 text-lg font-bold outline-none placeholder:font-normal placeholder:text-ink-soft/60" />
+    </div>
+  );
+}
 
 export function Chip({ active, children, onClick, className }: { active?: boolean; children: ReactNode; onClick?: () => void; className?: string }) {
   return (

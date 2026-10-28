@@ -198,7 +198,7 @@ async function storage(req, res, url) {
   send(res, 405, { message: "Method not allowed" });
 }
 
-const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".json": "application/json" };
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
 http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
@@ -212,7 +212,8 @@ http.createServer(async (req, res) => {
     if (url.pathname === "/config.js") {
       // En local la app usa este mismo servidor como "Supabase"
       res.writeHead(200, { "Content-Type": "text/javascript" });
-      return res.end(`window.CONECTAPRO_CONFIG = { supabaseUrl: location.origin, anonKey: "local-dev" };`);
+      const vapid = (fs.readFileSync(path.join(ROOT, "public/config.js"), "utf8").match(/vapidPublicKey:\s*"([^"]+)"/) || [])[1] || "";
+      return res.end(`window.CONECTAPRO_CONFIG = { supabaseUrl: location.origin, anonKey: "local-dev", vapidPublicKey: "${vapid}" };`);
     }
     if (!fs.existsSync(f)) f = path.join(STATIC, "index.html");
     res.writeHead(200, { "Content-Type": MIME[path.extname(f)] || "application/octet-stream" });

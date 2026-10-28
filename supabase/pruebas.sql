@@ -71,6 +71,19 @@ insert into portafolio (proveedor_id, imagen, orden) values
 ('f0000000-0000-4000-8000-000000000003', 'img/pruebas/p2-1.svg', 0), ('f0000000-0000-4000-8000-000000000003', 'img/pruebas/p2-2.svg', 1), ('f0000000-0000-4000-8000-000000000003', 'img/pruebas/p2-3.svg', 2),
 ('f0000000-0000-4000-8000-000000000004', 'img/pruebas/p3-1.svg', 0), ('f0000000-0000-4000-8000-000000000004', 'img/pruebas/p3-2.svg', 1), ('f0000000-0000-4000-8000-000000000004', 'img/pruebas/p3-3.svg', 2);
 
+-- Catálogo de servicios de cada proveedor de prueba (con las mismas imágenes ilustrativas)
+delete from catalogo where proveedor_id in ('f0000000-0000-4000-8000-000000000002', 'f0000000-0000-4000-8000-000000000003', 'f0000000-0000-4000-8000-000000000004');
+insert into catalogo (proveedor_id, servicio_id, titulo, descripcion, precio_min, precio_max, condiciones, fotos, orden) values
+('f0000000-0000-4000-8000-000000000002', 'desayunos_sorpresa', 'Desayuno clásico', 'Fruta picada, croissant horneado el mismo día, jugo natural, café y tarjeta escrita a mano.', 60000, 75000, 'Pedido con 1 día de anticipación. Entrega desde las 5:00 a.m.', '{img/pruebas/p1-1.svg}', 0),
+('f0000000-0000-4000-8000-000000000002', 'desayunos_sorpresa', 'Desayuno saludable', 'Bowl de frutas con granola y yogur, avena, jugo verde y aromática.', 65000, 80000, 'Se puede adaptar sin azúcar o sin lácteos.', '{img/pruebas/p1-2.svg}', 1),
+('f0000000-0000-4000-8000-000000000002', 'desayunos_sorpresa', 'Desayuno para mamá', 'Dos croissants, café, flores pequeñas y tarjeta personalizada.', 85000, 95000, 'Incluye mensaje personalizado.', '{img/pruebas/p1-3.svg}', 2),
+('f0000000-0000-4000-8000-000000000003', 'desayunos_sorpresa', 'Premium con globos', 'Waffles con frutos rojos, flores naturales, globos metalizados y tarjeta.', 120000, 160000, 'Abono del 50 % al confirmar. Colores a elección.', '{img/pruebas/p2-1.svg}', 0),
+('f0000000-0000-4000-8000-000000000003', 'desayunos_sorpresa', 'Aniversario para dos', 'Desayuno doble con caja de regalo decorada y globos.', 140000, 160000, 'Pedido con 2 días de anticipación.', '{img/pruebas/p2-2.svg}', 1),
+('f0000000-0000-4000-8000-000000000003', 'desayunos_sorpresa', 'Sorpresa completa', 'Globos, arreglo floral, regalo y desayuno gourmet.', 150000, 160000, 'Incluye montaje en el lugar.', '{img/pruebas/p2-3.svg}', 2),
+('f0000000-0000-4000-8000-000000000004', 'desayunos_sorpresa', 'Desayuno sencillo', 'Sándwich, jugo, chocolatina y tarjeta impresa.', 45000, 55000, 'Entrega el mismo día si pides antes de las 10:00 a.m.', '{img/pruebas/p3-1.svg}', 0),
+('f0000000-0000-4000-8000-000000000004', 'desayunos_sorpresa', 'Ancheta', 'Canasta con frutas, pan artesanal y café.', 60000, 80000, 'Se puede personalizar el contenido.', '{img/pruebas/p3-2.svg}', 1),
+('f0000000-0000-4000-8000-000000000004', 'desayunos_sorpresa', 'Combo express', 'Sándwich, fruta y jugo con entrega rápida en Los Patios, Cúcuta y Villa del Rosario.', 50000, 65000, 'Entrega en máximo 2 horas.', '{img/pruebas/p3-3.svg}', 2);
+
 -- Deja las cuentas de prueba como nuevas (borra solo los datos de las cuentas de prueba)
 create or replace function cp_reiniciar_pruebas() returns void
 language plpgsql security definer set search_path = public as $$

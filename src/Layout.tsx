@@ -4,7 +4,7 @@
 import { ReactNode } from "react";
 import {
   LuHouse, LuSearch, LuPlus, LuMessageCircleMore, LuUserRound, LuClipboardList, LuBell, LuMapPin,
-  LuBriefcase, LuRepeat, LuArrowLeftRight, LuLifeBuoy, LuGift, LuChevronDown,
+  LuBriefcase, LuRepeat, LuArrowLeftRight, LuLifeBuoy, LuGift, LuChevronDown, LuLayoutGrid,
 } from "react-icons/lu";
 import type { IconType } from "react-icons";
 import { useStore } from "./store";
@@ -87,7 +87,10 @@ function Sidebar() {
         { to: "/solicitudes", label: "Mis solicitudes", icon: LuClipboardList, match: ["/solicitud", "/proveedores/", "/acuerdo/", "/calificar/", "/buscando/"] },
         { to: "/trueque", label: "Match por trueque", icon: LuRepeat },
       ]
-    : [{ to: "/trabajos", label: "Mis trabajos", icon: LuBriefcase, match: ["/trabajo"] }];
+    : [
+        { to: "/trabajos", label: "Mis trabajos", icon: LuBriefcase, match: ["/trabajo"] },
+        { to: "/catalogo", label: "Mi catálogo", icon: LuLayoutGrid },
+      ];
   const all = [...items.slice(0, 2), ...extra, ...items.slice(2)];
 
   const switchMode = () => {

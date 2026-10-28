@@ -2,16 +2,16 @@ import { useMemo, useRef, useState } from "react";
 import {
   LuSlidersHorizontal, LuMapPin, LuClock, LuChevronRight, LuCheck, LuX, LuWrench, LuCircleCheck, LuBriefcase,
   LuMessageCircle, LuTriangleAlert, LuCalendarDays, LuCircleDollarSign, LuCreditCard, LuUserRound, LuImagePlus,
-  LuTrash2, LuStore, LuRadar, LuTimer, LuFileText, LuClipboardList, LuSend, LuChevronDown, LuLocateFixed,
+  LuTrash2, LuStore, LuRadar, LuTimer, LuFileText, LuClipboardList, LuSend, LuChevronDown, LuLocateFixed, LuLink, LuLayoutGrid,
 } from "react-icons/lu";
 import { AppShell, MobileTopBar } from "../Layout";
 import { Request, useStore } from "../store";
 import { Link, navigate } from "../router";
 import {
-  Avatar, Badge, Button, Chip, Empty, MapMock, Modal, PageHeader, Rating, SectionTitle, Stars, TestBadge, Toggle,
+  Avatar, Badge, Button, Chip, Empty, MapMock, Modal, MoneyInput, PageHeader, Rating, SectionTitle, Stars, TestBadge, Toggle, DOT,
   PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, CATEGORY_ICON, agreementWhen, cx, mainCategories, shortDate, timeAgo,
 } from "../ui";
-import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, money, serviceById, CATEGORIES } from "../data";
+import { PAYMENTS, PaymentMethod, SERVICES, ServiceId, money, serviceById, CATEGORIES, LINK_TYPES, LinkType, ProviderLink } from "../data";
 import { UbicacionSelect, useGeolocation, GEO_MSG } from "../geo";
 import { useBusy } from "../store";
 import { distanceKm, scheduleLabel } from "../matching";
@@ -49,7 +49,7 @@ export function ProviderHome() {
         {[
           [nuevas.length, "Nuevas", "bg-brand", "/oportunidades"],
           [enCurso, "En curso", "bg-brand-blue", "/trabajos"],
-          [completadas, "Completadas", "bg-ok", "/trabajos"],
+          [completadas, "Completadas", DOT.completado, "/trabajos"],
         ].map(([n, l, c, to]: any) => (
           <Link key={l} to={to} className="card min-w-0 px-3 py-3 transition hover:ring-brand/40 sm:px-4 sm:py-3.5">
             <div className="text-2xl font-extrabold text-ink">{n}</div>
@@ -122,16 +122,18 @@ function OpportunityCard({ r, distance }: { r: Request; distance: number }) {
           <p className="mt-1 line-clamp-2 text-[15px] leading-snug text-ink-soft">{r.desc}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-soft">
             <span className="inline-flex items-center gap-1 font-semibold text-brand-blue"><LuMapPin className="h-4 w-4" />≈ {distance.toFixed(1)} km · {r.municipioNombre}</span>
-            <span className="inline-flex items-center gap-1"><LuClock className="h-4 w-4" />{timeAgo(r.createdAt)}</span>
+            {r.date && r.time ? <span className="inline-flex items-center gap-1 font-semibold text-ink"><LuCalendarDays className="h-4 w-4" />{agreementWhen(r.date, r.time)}</span>
+              : <span className="inline-flex items-center gap-1"><LuClock className="h-4 w-4" />{timeAgo(r.createdAt)}</span>}
+            {r.budget ? <span className="inline-flex items-center gap-1"><LuCircleDollarSign className="h-4 w-4" />Presupuesto {r.budgetType === "maximo" ? "máx. " : ""}{money(r.budget)}</span> : null}
             <span className="inline-flex items-center gap-1"><PIcon className={cx("h-4 w-4", PAYMENT_COLOR[r.payment])} />{PAYMENTS[r.payment].split(" ")[0]}</span>
             <LuChevronRight className="ml-auto h-5 w-5 text-ink-soft lg:hidden" />
           </div>
         </div>
       </Link>
       <div className="mt-3 hidden items-center gap-2 border-t border-line pt-3 lg:flex">
-        {applied ? <Badge tone="ok" icon={LuCircleCheck}>Postulado · esperando al cliente</Badge> : (
+        {applied ? <Badge tone="postulacion" icon={LuCircleCheck}>Postulado · negocia por el chat</Badge> : (
           <>
-            <Button className="px-4 py-2 text-sm" icon={LuCheck} disabled={busy} onClick={() => wrap(async () => { await applyTo(r.id, suggested); toast(`Te postulaste con ${money(suggested)}`); })}>Aceptar</Button>
+            <Button className="px-4 py-2 text-sm" icon={LuCheck} disabled={busy} onClick={() => wrap(async () => { await applyTo(r.id, suggested); toast(`Te postulaste con ${money(suggested)}. Ya puedes conversar con el cliente.`); })}>Postularme ({money(suggested)})</Button>
             <Button variant="outline" className="px-4 py-2 text-sm" icon={LuX} disabled={busy} onClick={() => wrap(async () => { await decline(r.id); toast("Oportunidad descartada"); })}>Descartar</Button>
             <Link to={"/oportunidad/" + r.id} className="ml-auto self-center text-sm font-semibold text-brand">Ver detalle y proponer precio →</Link>
           </>
@@ -168,7 +170,7 @@ export function Opportunities() {
       <UbicacionSelect variant="compact" allowAll value={ubic} onChange={setUbic} className="mb-4" />
       <div className="mb-5 flex gap-2.5">
         <Chip active={tab === "nuevas"} onClick={() => setTab("nuevas")} className="px-6 py-2.5 text-base">Nuevas ({nuevas.length})</Chip>
-        <Chip active={tab === "postuladas"} onClick={() => setTab("postuladas")} className="px-6 py-2.5 text-base">Mis postulaciones ({postuladas.length})</Chip>
+        <Chip active={tab === "postuladas"} onClick={() => setTab("postuladas")} className={cx("px-6 py-2.5 text-base", tab === "postuladas" && "!bg-[#16a34a] !shadow-none")}>Mis postulaciones ({postuladas.length})</Chip>
       </div>
       <div className="grid gap-4 xl:grid-cols-2">{list.map((o) => <OpportunityCard key={o.r.id} r={o.r} distance={o.distance} />)}</div>
       {list.length === 0 && <Empty icon={LuClipboardList} title={tab === "nuevas" ? "No hay oportunidades nuevas" : "Aún no te has postulado"} />}
@@ -184,7 +186,7 @@ export function OpportunityDetail({ id }: { id: string }) {
   const r = findRequest(id);
   const [busy, wrap] = useBusy();
   const suggested = myProvider ? Math.round((myProvider.priceMin + myProvider.priceMax) / 2 / 5000) * 5000 : 50000;
-  const [price, setPrice] = useState(suggested);
+  const [price, setPrice] = useState<number | null>(null);   // vacío: el proveedor escribe su precio
   const [note, setNote] = useState("");
   if (!r || !myProvider) return <AppShell><Empty icon={LuClipboardList} title="Esta oportunidad ya no está disponible" text="Es posible que el cliente ya haya elegido a otro proveedor o la haya cancelado." action={<Button onClick={() => navigate("/oportunidades")}>Ver oportunidades</Button>} /></AppShell>;
   const c = clientInfo(r.clientKey);
@@ -210,6 +212,10 @@ export function OpportunityDetail({ id }: { id: string }) {
           </div>
           <h1 className="mt-5 text-2xl font-extrabold">{r.title}</h1>
           <p className="mt-2 text-lg text-ink-soft">{r.desc}</p>
+          <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+            {r.date && r.time && <Info icon={LuCalendarDays} k="Fecha y hora solicitadas" v={agreementWhen(r.date, r.time)} />}
+            <Info icon={LuCircleDollarSign} k="Presupuesto del cliente" v={r.budget ? `${r.budgetType === "maximo" ? "Máximo " : "Estimado "}${money(r.budget)}` : "Sin presupuesto: propón tu precio"} />
+          </dl>
           <Mapa className="mt-5 h-52" center={r.location} point={r.location} approx={!!r.location.approximate} />
           <div className="mt-3 flex items-start gap-3 rounded-2xl bg-surface p-4">
             <LuMapPin className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
@@ -230,24 +236,22 @@ export function OpportunityDetail({ id }: { id: string }) {
             <p className="font-semibold text-ink-soft">Esta solicitud ya fue asignada a otro proveedor.</p>
           ) : applied ? (
             <>
-              <Badge tone="ok" icon={LuCircleCheck} className="text-base">Te postulaste</Badge>
-              <p className="mt-3 text-ink-soft">Propusiste <b className="text-ink">{money(applied.price)}</b>. El cliente comparará tu oferta con las demás y te avisaremos si te elige. Puedes cambiar tu precio enviando una nueva propuesta.</p>
-              <Button variant="soft" className="mt-5 w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Escribir al cliente</Button>
+              <Badge tone="postulacion" icon={LuCircleCheck} className="text-base">Te postulaste</Badge>
+              <p className="mt-3 text-ink-soft">Tu oferta inicial: <b className="text-ink">{money(applied.price)}</b>. Conversa con el cliente para aclarar los detalles y envíale tu <b className="text-ink">propuesta formal</b> desde el chat. La contratación queda en firme cuando el cliente la acepta.</p>
+              <Button className="mt-5 w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Conversar y enviar propuesta</Button>
             </>
           ) : (
             <>
-              <div className="text-lg font-extrabold">Envía tu propuesta</div>
-              <p className="text-sm text-ink-soft">Tu rango: {money(myProvider.priceMin)} - {money(myProvider.priceMax)}</p>
-              <label className="mt-4 block text-sm font-semibold">Precio propuesto
-                <div className="mt-1 flex items-center rounded-2xl bg-surface px-4 ring-1 ring-line focus-within:ring-2 focus-within:ring-brand/50">
-                  <span className="text-lg font-bold">$</span>
-                  <input type="number" step={5000} min={5000} value={price} onChange={(e) => setPrice(+e.target.value)} className="w-full bg-transparent px-2 py-3 text-lg font-bold outline-none" />
-                </div>
+              <div className="text-lg font-extrabold">Postúlate</div>
+              <p className="text-sm text-ink-soft">Tu rango: {money(myProvider.priceMin)} - {money(myProvider.priceMax)}{r.budget ? ` · presupuesto del cliente: ${money(r.budget)}` : ""}</p>
+              <label className="mt-4 block text-sm font-semibold">Oferta inicial
+                <MoneyInput className="mt-1" name="precio" value={price} onChange={setPrice} placeholder={`Ej. ${suggested.toLocaleString("es-CO")}`} ariaLabel="Oferta inicial" />
               </label>
+              <p className="mt-1 text-xs text-ink-soft">Al postularte se abre el chat con el cliente. El precio final se acuerda en tu propuesta formal.</p>
               <label className="mt-4 block text-sm font-semibold">Mensaje para el cliente (opcional)
                 <textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={160} placeholder="Ej. Puedo llegar en 30 minutos con los materiales." className="mt-1 h-24 w-full resize-none rounded-2xl bg-surface p-3 font-normal outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" />
               </label>
-              <Button className="mt-5 w-full py-4" icon={LuCheck} disabled={price < 5000 || busy} onClick={() => wrap(async () => { await applyTo(r.id, price, note || undefined); toast("¡Postulación enviada! El cliente fue notificado."); })}>{busy ? "Enviando…" : "Aceptar y postularme"}</Button>
+              <Button className="mt-5 w-full py-4" icon={LuCheck} disabled={!price || price < 5000 || busy} onClick={() => wrap(async () => { await applyTo(r.id, price!, note || undefined); toast("¡Postulación enviada! Ya puedes conversar con el cliente."); })}>{busy ? "Enviando…" : "Postularme"}</Button>
               <Button variant="outline" className="mt-3 w-full" icon={LuX} disabled={busy} onClick={() => wrap(async () => { await decline(r.id); toast("Oportunidad descartada"); navigate("/inicio"); })}>Descartar</Button>
             </>
           )}
@@ -317,6 +321,15 @@ export function JobDetail({ id }: { id: string }) {
             {r.agreement && <Info icon={LuCalendarDays} k="Fecha pactada" v={agreementWhen(r.agreement.date, r.agreement.time) + (r.agreement.extendedDays ? ` (+${r.agreement.extendedDays} días)` : "")} />}
             {r.agreement && <Info icon={LuCircleDollarSign} k="Valor" v={money(r.agreement.price)} />}
           </dl>
+          {r.agreement?.service && (
+            <div className="mt-5 rounded-2xl p-4 ring-1 ring-line">
+              <div className="text-sm font-bold text-ink-soft">Condiciones acordadas</div>
+              <p className="mt-1">{r.agreement.service}</p>
+              {r.agreement.address && <p className="mt-1 text-sm text-ink-soft"><b>Lugar:</b> {r.agreement.address}</p>}
+              {r.agreement.conditions && <p className="mt-1 text-sm text-ink-soft"><b>Condiciones:</b> {r.agreement.conditions}</p>}
+              {r.agreement.modifiedAt && <p className="mt-1 text-xs text-ink-soft">Modificado y aceptado el {shortDate(r.agreement.modifiedAt)}</p>}
+            </div>
+          )}
           <Mapa className="mt-5 h-56" center={r.location} point={r.location} approx={!!r.location.approximate} />
           {!r.location.approximate && <a href={comoLlegar(r.location)} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 rounded-xl bg-brand-50 px-4 py-2.5 text-sm font-bold text-brand"><LuMapPin className="h-4 w-4" />Cómo llegar (Google Maps)</a>}
           {r.punctualityPenalty && <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[#fff4dc] p-3 text-sm font-medium text-[#9a5b00]"><LuTriangleAlert className="h-5 w-5" /> El cliente reportó un retraso: tienes 2 días adicionales y se registró una valoración negativa de puntualidad.</div>}
@@ -324,7 +337,7 @@ export function JobDetail({ id }: { id: string }) {
           {r.clientRating && <div className="mt-3 rounded-2xl p-4 ring-1 ring-line"><div className="text-sm font-bold text-ink-soft">Tu calificación al cliente</div><Stars value={r.clientRating.stars} /></div>}
         </div>
         <div className="card space-y-3 self-start p-5">
-          <Button variant="soft" className="w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>Escribir al cliente</Button>
+          <Button variant="soft" className="w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ user: r.clientKey })))}>{r.status === "en_curso" ? "Chat · proponer un cambio" : "Escribir al cliente"}</Button>
           {r.agreement && <Button variant="outline" className="w-full" icon={LuFileText} onClick={() => setContract(true)}>Ver contrato</Button>}
           {r.status === "en_curso" && (
             <>
@@ -404,12 +417,13 @@ export function MyService() {
   const [days, setDays] = useState<number[]>(p?.schedule.days ?? [1, 2, 3, 4, 5, 6]);
   const [from, setFrom] = useState(p?.schedule.from ?? 8);
   const [to, setTo] = useState(p?.schedule.to ?? 18);
-  const [priceMin, setPriceMin] = useState(p?.priceMin ?? 40000);
-  const [priceMax, setPriceMax] = useState(p?.priceMax ?? 80000);
+  const [priceMin, setPriceMin] = useState<number | null>(p ? p.priceMin : null);
+  const [priceMax, setPriceMax] = useState<number | null>(p ? p.priceMax : null);
   const [about, setAbout] = useState(p?.about ?? "");
   const [offers, setOffers] = useState((p?.offers ?? []).join("\n"));
   const [gallery, setGallery] = useState<string[]>(p?.portfolio ?? []);
   const [publicLocation, setPublicLocation] = useState(p?.publicLocation ?? false);
+  const [links, setLinks] = useState<ProviderLink[]>(p?.links ?? []);
   const [moreCats, setMoreCats] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -424,7 +438,9 @@ export function MyService() {
     if (to <= from) e.push("La hora de cierre debe ser posterior a la de apertura");
     if (about.trim().length < 15) e.push("Describe lo que haces (mínimo 15 caracteres)");
     if (!ubic.departamento || !ubic.municipio) e.push("Selecciona el departamento y el municipio donde atiendes");
-    if (priceMax < priceMin) e.push("El precio máximo debe ser mayor o igual al mínimo");
+    if (links.some((l) => !/^https?:\/\/\S+\.\S+$/.test(l.url.trim()))) e.push("Revisa tus enlaces: deben empezar por https://");
+    if (priceMin == null || priceMax == null) e.push("Escribe tu precio mínimo y máximo");
+    else if (priceMax < priceMin) e.push("El precio máximo debe ser mayor o igual al mínimo");
     setErrors(e);
     if (e.length) return window.scrollTo({ top: 0, behavior: "smooth" });
     wrap(async () => {
@@ -434,6 +450,7 @@ export function MyService() {
         days: [...days].sort(), from, to, priceMin, priceMax, about: about.trim(),
         ...(geo.fix ? { lat: geo.fix.lat, lng: geo.fix.lng } : {}),
         offers: offers.split("\n").map((s) => s.trim()).filter(Boolean), portfolio: gallery, publicLocation,
+        links: links.map((l) => ({ ...l, url: l.url.trim() })).filter((l) => l.url),
       });
       toast(isNew ? "¡Perfil de proveedor creado! Ya puedes recibir oportunidades" : "Cambios guardados");
       navigate("/inicio");
@@ -542,8 +559,8 @@ export function MyService() {
         <section className="card space-y-4 p-6">
           <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuCircleDollarSign className="h-5 w-5 text-brand" /> Precios y descripción</h2>
           <div className="grid grid-cols-2 gap-4">
-            <label className="block text-sm font-semibold">Precio mínimo<input type="number" step={5000} value={priceMin} onChange={(e) => setPriceMin(+e.target.value)} className={sel} /></label>
-            <label className="block text-sm font-semibold">Precio máximo<input type="number" step={5000} value={priceMax} onChange={(e) => setPriceMax(+e.target.value)} className={sel} /></label>
+            <label className="block text-sm font-semibold">Precio mínimo<MoneyInput className="mt-1" value={priceMin} onChange={setPriceMin} placeholder="Ej. 40.000" ariaLabel="Precio mínimo" /></label>
+            <label className="block text-sm font-semibold">Precio máximo<MoneyInput className="mt-1" value={priceMax} onChange={setPriceMax} placeholder="Ej. 80.000" ariaLabel="Precio máximo" /></label>
           </div>
           <label className="block text-sm font-semibold">Describe lo que haces
             <textarea value={about} onChange={(e) => setAbout(e.target.value)} maxLength={400} placeholder="Ej. Más de 5 años de experiencia en plomería residencial y comercial." className={cx(sel, "h-28 resize-none")} />
@@ -552,6 +569,29 @@ export function MyService() {
             <textarea value={offers} onChange={(e) => setOffers(e.target.value)} placeholder={"Instalación de tuberías\nDestapado de cañerías"} className={cx(sel, "h-28 resize-none")} />
           </label>
         </section>
+
+        <section className="card space-y-3 p-6">
+          <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuLink className="h-5 w-5 text-brand" /> Enlaces</h2>
+          <p className="text-sm text-ink-soft">Tu portafolio, redes profesionales o página comercial. Los clientes los verán en tu perfil.</p>
+          {links.map((l, i) => (
+            <div key={i} className="flex flex-col gap-2 sm:flex-row">
+              <select value={l.type} onChange={(e) => setLinks(links.map((x, k) => (k === i ? { ...x, type: e.target.value as LinkType } : x)))} className="rounded-2xl bg-white px-3 py-3 ring-1 ring-line sm:w-48" aria-label="Tipo de enlace">
+                {(Object.keys(LINK_TYPES) as LinkType[]).map((t) => <option key={t} value={t}>{LINK_TYPES[t]}</option>)}
+              </select>
+              <input value={l.url} onChange={(e) => setLinks(links.map((x, k) => (k === i ? { ...x, url: e.target.value } : x)))} placeholder="https://…" inputMode="url" className="min-w-0 flex-1 rounded-2xl bg-white px-4 py-3 outline-none ring-1 ring-line focus:ring-2 focus:ring-brand/50" aria-label="Dirección del enlace" />
+              <button type="button" onClick={() => setLinks(links.filter((_, k) => k !== i))} className="self-end rounded-xl p-3 text-bad hover:bg-bad-50 sm:self-auto" aria-label="Quitar enlace"><LuTrash2 className="h-5 w-5" /></button>
+            </div>
+          ))}
+          {links.length < 6 && <Button type="button" variant="soft" className="px-4 py-2.5 text-sm" onClick={() => setLinks([...links, { type: "portafolio", url: "" }])}>Agregar enlace</Button>}
+        </section>
+
+        {!isNew && (
+          <Link to="/catalogo" className="card flex items-center gap-4 p-5 transition hover:ring-brand/40">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-50 text-brand"><LuLayoutGrid className="h-6 w-6" /></span>
+            <div className="flex-1"><div className="font-extrabold">Mi catálogo de servicios</div><div className="text-sm text-ink-soft">Crea, edita y elimina tus servicios con fotos, precios y condiciones.</div></div>
+            <LuChevronRight className="h-6 w-6 text-brand" />
+          </Link>
+        )}
 
         <section className="card p-6">
           <h2 className="flex items-center gap-2 text-lg font-extrabold"><LuImagePlus className="h-5 w-5 text-brand" /> Galería de trabajos</h2>

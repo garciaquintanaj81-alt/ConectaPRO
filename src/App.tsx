@@ -13,6 +13,7 @@ import { AppShell } from "./Layout";
 import { useEffect, useRef, useState } from "react";
 import { Simulator } from "./screens/Simulator";
 import { LegalPage, TermsGate, TestAccounts } from "./screens/Legal";
+import { MyCatalog } from "./screens/Catalog";
 import type { Notification } from "./store";
 import { LuBell } from "react-icons/lu";
 
@@ -71,6 +72,7 @@ export default function App() {
     ["/trabajo/:id", (p) => <JobDetail id={p.id} />],
     ["/calificar-cliente/:id", (p) => <RateClient id={p.id} />],
     ["/mi-servicio", () => <MyService />],
+    ["/catalogo", () => <MyCatalog />],
     // Comunes
     ["/mensajes", () => <Messages />],
     ["/chat/:id", (p) => <Messages activeId={p.id} />],
@@ -156,10 +158,10 @@ function Splash({ error }: { error?: string }) {
       <div className="text-2xl font-extrabold">Conecta<span className="text-brand-blue">+</span><span className="text-brand-gradient">PRO</span></div>
       {error ? (
         <>
-          <p className="max-w-sm text-ink-soft">No pudimos conectar con el servidor: <b className="text-ink">{error}</b></p>
+          <p className="max-w-sm text-ink-soft">No pudimos cargar ConectaPRO. Revisa tu conexión a internet e inténtalo de nuevo.</p>
           <Button icon={LuRefreshCw} onClick={() => location.reload()}>Reintentar</Button>
         </>
-      ) : <p className="text-ink-soft">Conectando con la base de datos…</p>}
+      ) : <p className="sr-only" role="status">Cargando…</p>}
     </div>
   );
 }
@@ -169,8 +171,8 @@ function SetupNeeded() {
     <div className="flex min-h-screen items-center justify-center bg-surface px-6">
       <div className="card max-w-lg p-8 text-center">
         <LuDatabase className="mx-auto h-12 w-12 text-brand" />
-        <h1 className="mt-4 text-2xl font-extrabold">Falta conectar la base de datos</h1>
-        <p className="mt-2 text-ink-soft">Edita el archivo <code className="rounded bg-surface px-1.5">config.js</code> con la URL y la clave pública (anon) de tu proyecto de Supabase. Los pasos están en el README del repositorio.</p>
+        <h1 className="mt-4 text-2xl font-extrabold">ConectaPRO no está disponible en este momento</h1>
+        <p className="mt-2 text-ink-soft">Estamos haciendo ajustes. Vuelve a intentarlo en unos minutos.</p>
       </div>
     </div>
   );

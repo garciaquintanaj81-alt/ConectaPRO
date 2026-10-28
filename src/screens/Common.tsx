@@ -9,7 +9,10 @@ import { AppShell } from "../Layout";
 import { useStore } from "../store";
 import { Link, goBack, navigate } from "../router";
 import { Avatar, Badge, Button, Chip, Empty, Field, Modal, PageHeader, TestBadge, Toggle, clock, cx, inputCls, timeAgo, SERVICE_ICON } from "../ui";
-import { LuFlaskConical, LuScale, LuImageOff } from "react-icons/lu";
+import { LuFlaskConical, LuScale, LuImageOff, LuFilePen, LuHandCoins } from "react-icons/lu";
+import { ProposalCard, ProposalForm, useProposalTargets } from "./Proposals";
+import { PushState, disablePush, enablePush, isIOS, pushState } from "../push";
+import { LuSmartphone, LuBellRing, LuBellOff } from "react-icons/lu";
 import { CATEGORIES, PAYMENTS, PaymentMethod, SERVICES, ServiceId, serviceById } from "../data";
 import { UbicacionSelect } from "../geo";
 import { useBusy } from "../store";
@@ -76,8 +79,14 @@ export function Messages({ activeId }: { activeId?: string }) {
 }
 
 function ChatPanel({ convId }: { convId: string }) {
-  const { chats, sendMessage, markConversationRead, toast } = useStore();
+  const { chats, sendMessage, markConversationRead, toast, myRequests } = useStore();
   const c = chats.find((x) => x.id === convId)!;
+  const peerProviderId = c.peerRole !== "Cliente" ? c.peerKey : null;
+  const targets = useProposalTargets(c.peerUserId, peerProviderId);
+  const [formOpen, setFormOpen] = useState(false);
+  // Como cliente: solicitudes abiertas a las que este proveedor se postuló (para pedirle la propuesta formal)
+  const negociando = peerProviderId ? myRequests.filter((r) => r.status === "buscando" && r.applicants.some((a) => a.providerId === peerProviderId)) : [];
+  const pendienteFormal = negociando.some((r) => r.proposals.some((x) => x.providerId === peerProviderId && x.status === "pendiente"));
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const typing = false;
@@ -108,10 +117,30 @@ function ChatPanel({ convId }: { convId: string }) {
         <button onClick={() => toast("Las videollamadas estarán disponibles próximamente")} className="rounded-full p-2.5 text-brand hover:bg-brand-50" aria-label="Videollamada"><LuVideo className="h-7 w-7 fill-brand" /></button>
       </header>
 
+      {(targets.length > 0 || negociando.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-line bg-brand-50/60 px-4 py-2.5 text-sm sm:px-6">
+          <span className="min-w-0 flex-1 text-ink-soft">
+            {targets.some((t) => t.kind === "contratacion") ? "Cuando estén de acuerdo, envía tu propuesta formal." :
+              targets.length ? "¿Hay que cambiar algo del acuerdo? Propónlo y la otra parte lo acepta." :
+              pendienteFormal ? "Tienes una propuesta formal esperando tu respuesta." : `Negociando: ${negociando[0].title}`}
+          </span>
+          {targets.length > 0 && <Button className="px-4 py-2 text-sm" icon={LuFilePen} onClick={() => setFormOpen(true)}>{targets.some((t) => t.kind === "contratacion") ? "Enviar propuesta formal" : "Proponer cambio"}</Button>}
+          {targets.length === 0 && negociando.length > 0 && !pendienteFormal && (
+            <Button variant="soft" className="px-4 py-2 text-sm" icon={LuHandCoins} onClick={() => sendMessage(c.id, { text: `¿Me puedes enviar tu propuesta formal para "${negociando[0].title}" con el precio final, la fecha, la hora y las condiciones?` })}>Pedir propuesta formal</Button>
+          )}
+        </div>
+      )}
+      <ProposalForm open={formOpen} onClose={() => setFormOpen(false)} targets={targets} />
+
       <div ref={scroller} className="flex-1 space-y-4 overflow-y-auto px-4 py-5 sm:px-6">
-        {c.messages.length === 0 && <p className="py-10 text-center text-ink-soft">Inicia la conversación con {c.peerName.split(" ")[0]} 👋</p>}
-        {c.messages.map((m) => m.from === "system" ? (
-          <div key={m.id} className="flex justify-center"><span className="rounded-full bg-brand-50 px-4 py-1.5 text-xs font-semibold text-brand">{m.text}</span></div>
+        {c.messages.length === 0 && <p className="py-10 text-center text-ink-soft">Inicia la conversación con {c.peerName.split(" ")[0]}</p>}
+        {c.messages.map((m) => m.proposal ? (
+          <div key={m.id} className={cx("flex flex-col", m.from === "me" ? "items-end" : "items-start")}>
+            <ProposalCard p={m.proposal} />
+            <div className="mt-1 text-sm text-ink-soft">{clock(m.at)}</div>
+          </div>
+        ) : m.from === "system" ? (
+          <div key={m.id} className="flex justify-center"><span className="max-w-[90%] rounded-2xl bg-brand-50 px-4 py-1.5 text-center text-xs font-semibold text-brand">{m.text}</span></div>
         ) : m.from === "me" ? (
           <div key={m.id} className="flex flex-col items-end">
             {m.image ? <img src={m.image} alt="Foto enviada" className="max-w-[78%] rounded-3xl sm:max-w-sm" /> : (
@@ -166,12 +195,11 @@ function ChatPanel({ convId }: { convId: string }) {
 //  Mi perfil
 // =====================================================================
 export function Profile() {
-  const { account, mode, setMode, myProvider, logout, strikes, points, toast } = useStore();
+  const { account, mode, setMode, myProvider, logout, strikes, points, toast, myRequests, myJobs, opportunities } = useStore();
   const [confirmOut, setConfirmOut] = useState(false);
   if (!account) return null;
   const items = [
     [LuUserRound, "Información personal", "/perfil/info"],
-    ...(mode === "cliente" ? [[LuBriefcase, "Mis solicitudes", "/solicitudes"]] : [[LuStore, "Mi servicio", "/mi-servicio"], [LuBriefcase, "Mis trabajos", "/trabajos"]]),
     [LuCreditCard, "Métodos de pago", "/perfil/pagos"],
     [LuMapPin, "Direcciones guardadas", "/perfil/direcciones"],
     [LuShieldCheck, "Seguridad y privacidad", "/perfil/seguridad"],
@@ -208,6 +236,45 @@ export function Profile() {
           </button>
         </div>
         <div className="space-y-3">
+          {/* Una sola cuenta, dos perfiles */}
+          <div className="grid gap-3 sm:grid-cols-2" data-testid="perfiles">
+            <div className={cx("rounded-3xl bg-white p-5 ring-1", mode === "cliente" ? "ring-2 ring-brand" : "ring-line")}>
+              <div className="flex items-center gap-2"><LuUserRound className="h-5 w-5 text-brand" /><div className="font-extrabold">Perfil de cliente</div>{mode === "cliente" && <Badge tone="brand" className="ml-auto px-2 py-0.5 text-[11px]">Activo</Badge>}</div>
+              <p className="mt-1 text-sm text-ink-soft">Publica necesidades con presupuesto, compara ofertas, conversa y gestiona tus contrataciones.</p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <Badge tone="soft" className="px-2 py-0.5">{myRequests.filter((r) => r.status === "buscando").length} publicadas</Badge>
+                <Badge tone="soft" className="px-2 py-0.5">{myRequests.filter((r) => r.status === "en_curso").length} contrataciones</Badge>
+                <Badge tone="completado" className="px-2 py-0.5">{myRequests.filter((r) => r.status === "completada").length} completadas</Badge>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link to="/publicar" className="rounded-xl bg-brand-50 px-3 py-2 text-sm font-semibold text-brand">Publicar necesidad</Link>
+                <Link to="/solicitudes" className="rounded-xl px-3 py-2 text-sm font-semibold text-brand ring-1 ring-line">Mis solicitudes</Link>
+              </div>
+            </div>
+            <div className={cx("rounded-3xl bg-white p-5 ring-1", mode === "proveedor" ? "ring-2 ring-brand" : "ring-line")}>
+              <div className="flex items-center gap-2"><LuStore className="h-5 w-5 text-brand" /><div className="font-extrabold">Perfil de proveedor</div>{mode === "proveedor" && <Badge tone="brand" className="ml-auto px-2 py-0.5 text-[11px]">Activo</Badge>}</div>
+              {myProvider ? (
+                <>
+                  <p className="mt-1 text-sm text-ink-soft"><b className="text-ink">{myProvider.company}</b> · {myProvider.profession}</p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <Badge tone="postulacion" className="px-2 py-0.5">{opportunities.filter((o) => o.r.applicants.some((a) => a.providerId === myProvider.id)).length} postulaciones</Badge>
+                    <Badge tone="soft" className="px-2 py-0.5">{myJobs.filter((j) => j.status === "en_curso").length} en curso</Badge>
+                    <Badge tone="completado" className="px-2 py-0.5">{myProvider.completed} completados</Badge>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link to="/mi-servicio" className="rounded-xl bg-brand-50 px-3 py-2 text-sm font-semibold text-brand">Mi negocio</Link>
+                    <Link to="/catalogo" className="rounded-xl px-3 py-2 text-sm font-semibold text-brand ring-1 ring-line">Catálogo</Link>
+                    <Link to="/trabajos" className="rounded-xl px-3 py-2 text-sm font-semibold text-brand ring-1 ring-line">Trabajos</Link>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="mt-1 text-sm text-ink-soft">Presenta tu negocio, publica tus servicios, define tu horario y responde solicitudes. Usas la misma cuenta.</p>
+                  <Link to="/mi-servicio" className="mt-3 inline-block rounded-xl bg-brand-50 px-3 py-2 text-sm font-semibold text-brand">Crear perfil de proveedor</Link>
+                </>
+              )}
+            </div>
+          </div>
           {items.map(([I, label, to]) => (
             <Link key={label} to={to} className="flex items-center gap-5 rounded-3xl bg-white/90 p-3 pr-5 shadow-[0_4px_18px_-12px_rgba(30,40,120,.2)] ring-1 ring-line/60 transition hover:ring-brand/30">
               <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#eef0fb]"><I className="h-8 w-8" strokeWidth={1.6} /></span>
@@ -477,7 +544,7 @@ function Security() {
       )}
       <div className="card p-6">
         <div className="font-bold text-bad">Eliminar mi cuenta</div>
-        <p className="mt-1 text-sm text-ink-soft">Se borrarán de la base de datos tu perfil, solicitudes, mensajes y demás información.</p>
+        <p className="mt-1 text-sm text-ink-soft">Se borrarán definitivamente tu perfil, solicitudes, mensajes y demás información.</p>
         <Button variant="danger" icon={LuTrash2} className="mt-4 w-full" onClick={() => setConfirm(true)}>Eliminar mi cuenta</Button>
       </div>
       <Modal open={confirm} onClose={() => setConfirm(false)} title="¿Eliminar tu cuenta definitivamente?">
@@ -519,14 +586,70 @@ function Benefits() {
   );
 }
 
+/** Activar o desactivar las notificaciones push en este navegador o celular */
+export function PushCard({ compact }: { compact?: boolean }) {
+  const { toast } = useStore();
+  const [st, setSt] = useState<PushState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState(false);
+  useEffect(() => { pushState().then(setSt).catch(() => setSt("no-soportado")); }, []);
+  if (!st || (compact && (st === "activo" || st === "no-soportado" || st === "sin-configurar"))) return null;
+  const run = async (fn: () => Promise<PushState>) => {
+    setBusy(true);
+    try { const r = await fn(); setSt(r); toast(r === "activo" ? "Listo: recibirás las notificaciones en este dispositivo" : r === "bloqueado" ? "El navegador bloqueó las notificaciones" : "Notificaciones desactivadas en este dispositivo"); }
+    catch (e: any) {
+      const m = String(e?.message || "");
+      toast(/push service|AbortError|registration|network/i.test(m) || e?.name === "AbortError"
+        ? "No se pudo conectar con el servicio de notificaciones del navegador. Revisa tu conexión e inténtalo de nuevo."
+        : m || "No se pudieron activar las notificaciones");
+    }
+    finally { setBusy(false); }
+  };
+  const msg: Record<PushState, string> = {
+    activo: "Recibirás avisos de nuevas oportunidades, mensajes, propuestas, aceptaciones y cambios en tus contrataciones, aunque no tengas la página abierta.",
+    inactivo: "Recibe avisos en este celular o computador aunque no tengas ConectaPRO abierto.",
+    bloqueado: "Bloqueaste las notificaciones de este sitio. Para activarlas, toca el candado junto a la dirección de la página → Notificaciones → Permitir, y vuelve aquí.",
+    "ios-instalar": "En iPhone y iPad primero instala la app: toca Compartir → «Agregar a pantalla de inicio», abre ConectaPRO desde ese ícono y vuelve a esta pantalla (requiere iOS 16.4 o superior).",
+    "no-soportado": "Este navegador no permite notificaciones push. Usa Chrome, Edge, Firefox o Samsung Internet. Mientras tanto verás los avisos dentro de la app.",
+    "sin-configurar": "Las notificaciones al celular estarán disponibles próximamente. Mientras tanto verás los avisos dentro de la app.",
+  };
+  return (
+    <div className={cx("card p-5", compact && "bg-brand-50/60")} data-testid="push-card">
+      <div className="flex items-start gap-3">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-50 text-brand">{st === "activo" ? <LuBellRing className="h-6 w-6" /> : st === "bloqueado" ? <LuBellOff className="h-6 w-6" /> : <LuSmartphone className="h-6 w-6" />}</span>
+        <div className="min-w-0 flex-1">
+          <div className="font-bold">Notificaciones en este dispositivo {st === "activo" && <Badge tone="ok" className="ml-1 px-2 py-0.5 text-[11px]">Activadas</Badge>}</div>
+          <p className="mt-0.5 text-sm text-ink-soft">{msg[st]}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {st === "inactivo" && <Button className="px-4 py-2.5 text-sm" icon={LuBellRing} disabled={busy} onClick={() => run(enablePush)}>{busy ? "Activando…" : "Activar notificaciones"}</Button>}
+        {st === "activo" && <Button variant="outline" className="px-4 py-2.5 text-sm" disabled={busy} onClick={() => run(disablePush)}>Desactivar en este dispositivo</Button>}
+        {!compact && <button className="text-sm font-semibold text-brand" onClick={() => setInfo(!info)}>{info ? "Ocultar detalles" : "¿Cómo funcionan?"}</button>}
+      </div>
+      {info && (
+        <ul className="mt-3 space-y-1.5 text-sm text-ink-soft">
+          <li>• <b className="text-ink">Android</b> (Chrome, Edge, Samsung Internet): llegan aunque cierres la página. El ahorro de batería puede retrasarlas; si no te llegan, permite a tu navegador funcionar en segundo plano.</li>
+          <li>• <b className="text-ink">iPhone / iPad</b>: solo desde iOS 16.4 y con ConectaPRO agregado a la pantalla de inicio{isIOS() ? " (sigue los pasos de arriba)" : ""}.</li>
+          <li>• <b className="text-ink">Computador</b>: llegan mientras el navegador esté abierto, aunque la pestaña esté cerrada.</li>
+          <li>• Se activan por dispositivo: hazlo en cada celular o computador donde quieras recibirlas.</li>
+          <li>• Si las desactivas, igual verás todos los avisos en la campana de la app.</li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function NotifPrefs() {
   const { prefs: p, setPrefs, toast } = useStore();
   const rows: [keyof typeof p, string, string][] = [
-    ["push", "Notificaciones en tiempo real", "Alertas de nuevas oportunidades, postulaciones y mensajes"],
+    ["push", "Notificaciones push", "Avisos al celular de oportunidades, mensajes, propuestas y cambios en tus contrataciones"],
     ["email", "Correo electrónico", "Resumen de acuerdos y contratos digitales"],
     ["ia", "Recomendaciones inteligentes", "Sugerencias basadas en tus servicios recurrentes"],
   ];
   return (
+    <div className="space-y-4">
+    <PushCard />
     <div className="card divide-y divide-line">
       {rows.map(([k, t, d]) => (
         <div key={k} className="flex items-center gap-4 p-5">
@@ -534,6 +657,7 @@ function NotifPrefs() {
           <Toggle on={p[k]} onChange={(v) => setPrefs({ ...p, [k]: v }).then(() => toast("Preferencia guardada")).catch(() => null)} label={t} />
         </div>
       ))}
+    </div>
     </div>
   );
 }
@@ -563,7 +687,7 @@ function Help() {
 // =====================================================================
 //  Notificaciones
 // =====================================================================
-const N_ICON = { match: LuSearch, agreement: LuHandshake, rating: LuStar, ia: LuBrain, info: LuInfo, strike: LuTriangleAlert, message: LuMessageCircleMore };
+const N_ICON = { match: LuSearch, agreement: LuHandshake, rating: LuStar, ia: LuBrain, info: LuInfo, strike: LuTriangleAlert, message: LuMessageCircleMore, proposal: LuFilePen };
 export function Notifications() {
   const { notifications, markNotificationsRead } = useStore();
   useEffect(() => { const t = setTimeout(markNotificationsRead, 1500); return () => clearTimeout(t); }, []);
@@ -571,6 +695,7 @@ export function Notifications() {
     <AppShell>
       <PageHeader title="Notificaciones" back="/inicio" />
       <div className="mx-auto max-w-2xl space-y-3">
+        <PushCard compact />
         {notifications.map((n) => {
           const I = N_ICON[n.kind];
           return (

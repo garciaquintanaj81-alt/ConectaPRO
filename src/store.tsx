@@ -11,12 +11,23 @@ import {
   Account, Address, ClientInfo, DEMO_PASSWORD, PaymentMethod, PayMethod, Provider, ServiceId, TEST_PASSWORD, setCatalog,
 } from "./data";
 import { TERMS_VERSION } from "./legal";
+import { disablePush } from "./push";
 
 export type Mode = "cliente" | "proveedor";
 export type Status = "buscando" | "en_curso" | "completada" | "cancelada";
 
 export interface Applicant { providerId: string; price: number; at: number; note?: string; distanceKm?: number }
-export interface Agreement { date: string; time: string; price: number; code: string; signedAt: number; extendedDays?: number }
+export interface Agreement {
+  date: string; time: string; price: number; code: string; signedAt: number; extendedDays?: number;
+  /** Condiciones pactadas en la propuesta aceptada */
+  address?: string | null; service?: string | null; conditions?: string | null; modifiedAt?: number | null;
+}
+export type ProposalStatus = "pendiente" | "aceptada" | "rechazada" | "reemplazada" | "retirada";
+export interface Proposal {
+  id: string; requestId: string; requestTitle: string; providerId: string; authorId: string; kind: "contratacion" | "modificacion";
+  service: string; price: number; date: string; time: string; address: string; conditions: string;
+  status: ProposalStatus; reason?: string | null; at: number; respondedAt?: number | null;
+}
 export interface Rating { stars: number; comment: string; at: number }
 export interface Trace { total: number; byCategory: number; byCoverage: number; bySchedule: number }
 
@@ -36,6 +47,13 @@ export interface Request {
   direccion: string | null;
   payment: PaymentMethod;
   wantsProposals: boolean;
+  /** Fecha (AAAA-MM-DD) y hora (HH:MM) en que se necesita el servicio */
+  date?: string | null;
+  time?: string | null;
+  /** Presupuesto del cliente (no es el precio final) */
+  budget?: number | null;
+  budgetType?: "estimado" | "maximo" | null;
+  proposals: Proposal[];
   createdAt: number;
   status: Status;
   matched: string[];
@@ -55,9 +73,9 @@ export interface Request {
   gpsPrecision?: number | null;
 }
 
-export interface Message { id: string; from: "me" | "peer" | "system"; text?: string; image?: string; at: number }
+export interface Message { id: string; from: "me" | "peer" | "system"; text?: string; image?: string; at: number; proposal?: Proposal | null }
 export interface Conversation { id: string; peerKey: string; peerUserId: string; peerName: string; peerPhoto?: string; peerTest?: boolean; peerRole: string; messages: Message[]; unread: number }
-export interface Notification { id: string; text: string; at: number; read: boolean; link?: string; kind: "match" | "agreement" | "rating" | "ia" | "info" | "strike" | "message" }
+export interface Notification { id: string; text: string; at: number; read: boolean; link?: string; kind: "match" | "agreement" | "rating" | "ia" | "info" | "strike" | "message" | "proposal" }
 export interface Barter { id: string; offers: ServiceId; needs: ServiceId; note: string }
 
 export interface TermsState { version: string; aceptada: boolean; fecha?: number | null }
@@ -317,7 +335,12 @@ function useStoreValue() {
       }
       await refresh();
     },
-    async logout() { stopWatch(); setGpsState("inactivo"); await api.signOut(); setSt(null); },
+    async logout() {
+      stopWatch(); setGpsState("inactivo");
+      // Este dispositivo deja de recibir notificaciones push de la cuenta que cierra sesión
+      await disablePush().catch(() => null);
+      await api.signOut(); setSt(null);
+    },
     /** Registra la aceptación de la versión vigente de los términos */
     acceptTerms: () => run(() => api.rpc("api_aceptar_terminos", { p_version: TERMS_VERSION, p_agente: navigator.userAgent })),
     /** Sube la foto a Supabase Storage, la asocia a la cuenta y borra la anterior */
@@ -351,16 +374,44 @@ function useStoreValue() {
     providerNoShow: (requestId: string) => run(() => api.rpc("api_no_asistir", { p_solicitud: requestId })),
 
     // ---------- Cliente ----------
-    publishRequest: (i: { desc: string; service: ServiceId; departamento: string; municipio: string; lat?: number | null; lng?: number | null; precision?: number | null; direccion: string; payment: PaymentMethod; wantsProposals: boolean }) =>
+    publishRequest: (i: { desc: string; service: ServiceId; departamento: string; municipio: string; date: string; time: string; budget?: number | null; budgetType?: "estimado" | "maximo";
+                          lat?: number | null; lng?: number | null; precision?: number | null; direccion: string; payment: PaymentMethod; wantsProposals: boolean }) =>
       run(() => api.rpc<{ id: string; notificados: number; trace: Trace; gps: boolean }>("api_publicar", {
         p_descripcion: i.desc, p_servicio: i.service, p_departamento: i.departamento, p_municipio: i.municipio,
+        p_fecha: i.date, p_hora: i.time, p_presupuesto: i.budget ?? null, p_presupuesto_tipo: i.budget ? i.budgetType ?? "estimado" : null,
         p_lat: i.lat ?? null, p_lng: i.lng ?? null, p_direccion: i.direccion, p_pago: i.payment, p_propuestas: i.wantsProposals,
         p_precision: i.precision ?? null,
       })),
     editRequest: (id: string, desc: string, payment: PaymentMethod, direccion?: string) => run(() => api.rpc("api_editar_solicitud", { p_id: id, p_descripcion: desc, p_pago: payment, p_direccion: direccion ?? null })),
     deleteRequest: (id: string) => run(() => api.rpc("api_eliminar_solicitud", { p_id: id })),
-    confirmAgreement: (requestId: string, providerId: string, date: string, time: string, price: number) =>
-      run(() => api.rpc<Request & { conversationId: string }>("api_confirmar_acuerdo", { p_solicitud: requestId, p_proveedor: providerId, p_fecha: date, p_hora: time, p_precio: price })),
+    // ---------- Negociación: propuestas formales ----------
+    sendProposal: (p: { requestId: string; service: string; price: number; date: string; time: string; address: string; conditions: string }) =>
+      run(() => api.rpc<Proposal & { conversationId: string }>("api_enviar_propuesta", {
+        p_solicitud: p.requestId, p_servicio: p.service, p_precio: p.price, p_fecha: p.date, p_hora: p.time, p_direccion: p.address, p_condiciones: p.conditions,
+      })),
+    respondProposal: (id: string, accept: boolean, reason?: string) =>
+      run(() => api.rpc<Request & { conversationId: string }>("api_responder_propuesta", { p_id: id, p_aceptar: accept, p_motivo: reason ?? null })),
+    withdrawProposal: (id: string) => run(() => api.rpc("api_retirar_propuesta", { p_id: id })),
+
+    // ---------- Catálogo del proveedor ----------
+    /** Guarda un servicio del catálogo; las fotos nuevas (Blob) se suben primero al almacenamiento */
+    async saveCatalogItem(item: { id?: string; service: string; title: string; description: string; priceMin: number | null; priceMax: number | null; conditions: string; active: boolean; photos: (string | Blob)[] }) {
+      const subidas: string[] = [];
+      try {
+        const photos: string[] = [];
+        for (const f of item.photos) {
+          if (typeof f === "string") photos.push(f);
+          else { const ruta = await run(() => api.uploadPhoto(f), { refresh: false }); subidas.push(ruta); photos.push(ruta); }
+        }
+        const r = await run(() => api.rpc<{ id: string; removidas: string[] }>("api_catalogo_guardar", { p_datos: { ...item, photos } }));
+        if (r.removidas?.length) api.deletePhotos(r.removidas).catch(() => null);
+        return r;
+      } catch (e) { if (subidas.length) api.deletePhotos(subidas).catch(() => null); throw e; }
+    },
+    async deleteCatalogItem(id: string) {
+      const r = await run(() => api.rpc<{ removidas: string[] }>("api_catalogo_eliminar", { p_id: id }));
+      if (r.removidas?.length) api.deletePhotos(r.removidas).catch(() => null);
+    },
     rate: (requestId: string, stars: number, comment: string) => run(() => api.rpc("api_calificar", { p_solicitud: requestId, p_estrellas: stars, p_comentario: comment })),
     extendDeadline: (requestId: string) => run(() => api.rpc("api_extender_plazo", { p_solicitud: requestId })),
     cancelRequest: (requestId: string, withStrike: boolean) => run(() => api.rpc("api_cancelar", { p_solicitud: requestId, p_con_falta: withStrike })),

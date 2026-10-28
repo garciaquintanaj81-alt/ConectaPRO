@@ -10,7 +10,18 @@ Autoras: Julieth A. García Quintana y Daniela S. Junco Salazar · Director: Mig
 🧪 **Cuentas de prueba (escenario "desayuno sorpresa"):** https://garciaquintanaj81-alt.github.io/ConectaPRO/#/pruebas
 📄 **Términos, condiciones y privacidad:** https://garciaquintanaj81-alt.github.io/ConectaPRO/#/legal
 
-> 💾 **Respaldo:** la versión anterior (v2) quedó guardada intacta en la rama [`respaldo/v2-original`](https://github.com/garciaquintanaj81-alt/ConectaPRO/tree/respaldo/v2-original). Para recuperarla: cambia a esa rama en GitHub, o en tu equipo `git checkout respaldo/v2-original`.
+> 💾 **Respaldos:** las versiones anteriores quedaron guardadas intactas en las ramas [`respaldo/v3`](https://github.com/garciaquintanaj81-alt/ConectaPRO/tree/respaldo/v3) y [`respaldo/v2-original`](https://github.com/garciaquintanaj81-alt/ConectaPRO/tree/respaldo/v2-original).
+
+## Novedades de la versión 4
+
+| Cambio | Qué hace |
+|---|---|
+| **Fecha, hora y presupuesto** | Al publicar se eligen fecha, hora y (opcional) un presupuesto estimado o máximo. Solo se notifica a los proveedores compatibles (subcategoría + cobertura) **que atienden ese día y a esa hora** según su horario. El horario solo filtra: no se bloquea la agenda |
+| **Negociación** | El cliente solo puede escribirle a un proveedor que se postuló. Al postularse se abre el chat; ahí negocian y el proveedor envía una **propuesta formal** (servicio, precio final, fecha, hora, lugar y condiciones). El acuerdo se crea solo cuando el cliente la acepta. Después, cualquier cambio se propone y la otra parte lo acepta; todo queda en el historial (tabla `propuestas`) |
+| **Perfiles** | Una sola cuenta con perfil de cliente y perfil de proveedor (Mi perfil) |
+| **Catálogo y enlaces** | El proveedor crea, edita y elimina servicios con fotos, precios y condiciones (`#/catalogo`) y agrega enlaces a su portafolio, redes o página web |
+| **Notificaciones push** | Avisos al celular aunque la página esté cerrada (service worker + función de Supabase). Configuración en [`supabase/PUSH.md`](supabase/PUSH.md). La campana de la app sigue funcionando siempre |
+| **Colores** | Postulaciones en verde, insignias en amarillo y completado en morado |
 
 ## Novedades de la versión 3
 

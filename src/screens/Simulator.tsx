@@ -26,12 +26,12 @@ const PHONES = [
 ];
 
 const STEPS = [
-  ["El cliente publica", "En el celular del cliente toca + : Desayunos y detalles sorpresa ya viene elegido. Escribe qué necesita y publica."],
-  ["Alerta a proveedores", "Dulce Despertar, Globos & Café y Detalles Express reciben la notificación al instante."],
-  ["Se postulan", "Cada proveedor abre la oportunidad, escribe su precio y se postula."],
-  ["El cliente compara", "Ve las 3 ofertas con precio, distancia y fotos de los trabajos de cada uno."],
-  ["Acuerdo digital", "Elige una, confirma fecha y hora, y el proveedor elegido recibe el acuerdo."],
-  ["Chatean y califican", "Pueden escribirse en tiempo real y al final se califican."],
+  ["El cliente publica", "Toca + : Desayunos y detalles sorpresa ya viene elegido. Elige fecha, hora y presupuesto, y publica."],
+  ["Alerta a disponibles", "Solo reciben la oportunidad los proveedores que atienden ese día y a esa hora según su horario."],
+  ["Se postulan", "Cada proveedor revisa la oportunidad y el presupuesto, y se postula con su oferta inicial."],
+  ["Conversan", "Al postularse se abre el chat. Aclaran detalles, negocian el precio, el lugar y el horario."],
+  ["Propuesta formal", "El proveedor envía desde el chat su propuesta: servicio, precio final, fecha, hora, lugar y condiciones."],
+  ["El cliente acepta", "Al aceptarla se crea el acuerdo. Cualquier cambio posterior se propone y la otra parte lo acepta."],
 ];
 
 function Phone({ id, role, color, reloadKey }: { id: string; role: string; color: string; reloadKey: number }) {

@@ -4,18 +4,19 @@ import {
   LuWallet, LuUsers, LuShieldCheck, LuMessageCircle, LuPhone, LuEllipsisVertical, LuWrench, LuBriefcase,
   LuTimer, LuCheck, LuCalendarDays, LuUserRound, LuCircleDollarSign, LuCreditCard, LuFileText, LuSparkles,
   LuFilter, LuBrain, LuCircleX, LuTriangleAlert, LuRepeat, LuArrowRight, LuClipboardList, LuRadar, LuStar,
-  LuChevronDown, LuZap, LuBadgeCheck, LuX, LuLocateFixed, LuNavigation, LuArrowLeft,
+  LuChevronDown, LuZap, LuBadgeCheck, LuX, LuLocateFixed, LuNavigation, LuArrowLeft, LuExternalLink,
 } from "react-icons/lu";
 import { AppShell, MobileTopBar } from "../Layout";
 import { useStore, Request } from "../store";
 import { Link, navigate } from "../router";
 import {
-  Avatar, Badge, Button, CategoryPicker, Chip, Empty, Modal, PageHeader, Rating, SectionTitle, Stars, Stepper, TestBadge, Toggle,
+  Avatar, Badge, Button, CategoryPicker, Chip, Empty, Modal, MoneyInput, PageHeader, Rating, SectionTitle, Stars, Stepper, TestBadge, Toggle, DOT, TONE,
   CATEGORY_ICON, localISO, PAYMENT_COLOR, PAYMENT_ICON, SERVICE_ICON, agreementWhen, clock, cx, shortDate, timeAgo,
 } from "../ui";
 import { GPS_MSG, ZonaChip } from "../zona";
 import { Mapa, Punto, DireccionDetectada, direccionDe, comoLlegar } from "../mapa";
-import { CATEGORIES, CategoryId, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById, servicesOf, categoryById } from "../data";
+import { CATEGORIES, CategoryId, LINK_TYPES, PAYMENTS, PaymentMethod, Provider, SERVICES, ServiceId, money, serviceById, servicesOf, categoryById } from "../data";
+import { photoSrc } from "../api";
 import { availability, availabilityLabel, distanceKm, predictRoutines, scheduleLabel } from "../matching";
 import { rpc } from "../api";
 import { UbicacionSelect, getMunicipios, useGeolocation, GEO_MSG } from "../geo";
@@ -137,7 +138,7 @@ function ActiveCard({ r }: { r: Request }) {
         {r.status === "en_curso" && r.agreement ? (
           <div className="text-sm text-ink-soft">{p?.name} · {agreementWhen(r.agreement.date, r.agreement.time)}</div>
         ) : (
-          <div className="text-sm font-semibold text-brand">{apps > 0 ? `${apps} oferta${apps > 1 ? "s" : ""} recibida${apps > 1 ? "s" : ""}` : "Esperando postulaciones"}</div>
+          <div className={cx("text-sm font-semibold", apps > 0 ? "text-[#166534]" : "text-brand")}>{apps > 0 ? `${apps} postulaci${apps > 1 ? "ones" : "ón"} recibida${apps > 1 ? "s" : ""}` : "Esperando postulaciones"}</div>
         )}
       </div>
       <LuChevronRight className="h-5 w-5 text-brand" />
@@ -253,7 +254,7 @@ export function Explore() {
 
       <div className="mt-4 flex items-center justify-between gap-3 text-sm text-ink-soft" aria-live="polite">
         <span data-testid="explorar-total">
-          {loading ? "Buscando en la base de datos…" : error ? "" : `${data?.total ?? 0} proveedor${data?.total === 1 ? "" : "es"} ${data?.referencia ? "en " + data.referencia : "en toda Colombia"}${sub ? " · " + serviceById(sub).name : cat ? " · " + (categoryById(cat)?.short ?? "") : ""}`}
+          {loading ? "Buscando…" : error ? "" : `${data?.total ?? 0} proveedor${data?.total === 1 ? "" : "es"} ${data?.referencia ? "en " + data.referencia : "en toda Colombia"}${sub ? " · " + serviceById(sub).name : cat ? " · " + (categoryById(cat)?.short ?? "") : ""}`}
         </span>
         {(q || cat || onlyNow || nearMe) && <button className="shrink-0 font-semibold text-brand" onClick={clearAll}>Limpiar filtros</button>}
       </div>
@@ -320,12 +321,17 @@ export function Publish() {
   const [err, setErr] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<number | null>(null);
   const [busy, wrap] = useBusy();
+  // Cuándo se necesita el servicio y presupuesto (opcional)
+  const [fecha, setFecha] = useState(localISO(Date.now() + 86400000));
+  const [hora, setHora] = useState("08:00");
+  const [budget, setBudget] = useState<number | null>(null);
+  const [budgetType, setBudgetType] = useState<"estimado" | "maximo">("estimado");
 
-  // Vista previa del algoritmo (consulta la base de datos)
+  // Vista previa del algoritmo: proveedores de la subcategoría que cubren el municipio y atienden en esa fecha y hora
   useEffect(() => {
     if (!ubic.municipio || !service) { setPreview(null); return; }
-    rpc<number>("api_vista_previa", { p_servicio: service, p_municipio: ubic.municipio }).then(setPreview).catch(() => setPreview(null));
-  }, [service, ubic.municipio]);
+    rpc<number>("api_vista_previa", { p_servicio: service, p_municipio: ubic.municipio, p_fecha: fecha || null, p_hora: hora || null }).then(setPreview).catch(() => setPreview(null));
+  }, [service, ubic.municipio, fecha, hora]);
 
   // Centro del municipio elegido (para el mapa) y validación del punto
   useEffect(() => {
@@ -389,10 +395,13 @@ export function Publish() {
     if (!ubic.departamento) e.departamento = "Selecciona el departamento";
     if (!ubic.municipio) e.municipio = "Selecciona la ciudad o municipio";
     if (direccion.trim().length < 5) e.direccion = "Escribe la dirección donde se prestará el servicio";
+    if (!fecha || !hora) e.cuando = "Indica la fecha y la hora en que necesitas el servicio";
+    else if (new Date(`${fecha}T${hora}:00`).getTime() < Date.now() + 15 * 60000) e.cuando = "La fecha y hora deben ser al menos 15 minutos después de ahora";
+    if (budget != null && budget < 5000) e.budget = "El presupuesto mínimo es $5.000";
     setErr(e);
     if (Object.keys(e).length) { document.querySelector("[data-err]")?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     const pt = puntoValido ? punto : null;
-    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, lat: pt?.lat, lng: pt?.lng, precision: pt?.accuracy ?? null, direccion: direccion.trim(), payment, wantsProposals: proposals });
+    const r = await publishRequest({ desc: desc.trim(), service, ...ubic, date: fecha, time: hora, budget, budgetType, lat: pt?.lat, lng: pt?.lng, precision: pt?.accuracy ?? null, direccion: direccion.trim(), payment, wantsProposals: proposals });
     navigate("/buscando/" + r.id);
   });
 
@@ -459,9 +468,24 @@ export function Publish() {
             {errText("desc")}
           </section>
 
-          {/* 3. Ubicación */}
+          {/* 3. Fecha y hora */}
           <section className="card p-5">
-            {step(3, "¿Dónde se prestará el servicio?", !!ubic.municipio && direccion.trim().length >= 5)}
+            {step(3, "¿Cuándo lo necesitas?", !!fecha && !!hora && !err.cuando)}
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm font-semibold">Fecha
+                <input type="date" name="fecha" value={fecha} min={localISO()} max={localISO(Date.now() + 180 * 86400000)} onChange={(e) => { setFecha(e.target.value); setErr({ ...err, cuando: "" }); }} className={cx(inputCls2, "mt-1 font-normal")} />
+              </label>
+              <label className="block text-sm font-semibold">Hora
+                <input type="time" name="hora" value={hora} step={900} onChange={(e) => { setHora(e.target.value); setErr({ ...err, cuando: "" }); }} className={cx(inputCls2, "mt-1 font-normal")} />
+              </label>
+            </div>
+            {errText("cuando")}
+            <p className="mt-2 text-xs text-ink-soft">Solo avisaremos a los proveedores que atienden en ese día y a esa hora según su horario.</p>
+          </section>
+
+          {/* 4. Ubicación */}
+          <section className="card p-5">
+            {step(4, "¿Dónde se prestará el servicio?", !!ubic.municipio && direccion.trim().length >= 5)}
             <UbicacionSelect variant="compact" value={ubic} onChange={(v) => { setUbic(v); setErr({ ...err, departamento: "", municipio: "" }); }} />
             {errText("departamento") || errText("municipio")}
             <div className="mt-3 flex flex-col gap-3 rounded-xl bg-surface p-3.5 text-sm sm:flex-row sm:items-center">
@@ -503,9 +527,22 @@ export function Publish() {
             <p className="mt-2 text-xs text-ink-soft">{punto ? "La dirección se llenó con tu ubicación; revísala y complétala (apartamento, torre, referencias). " : ""}Los proveedores solo ven una zona aproximada; la dirección y el punto exacto solo los ve el proveedor que contrates.</p>
           </section>
 
-          {/* 4. Pago */}
+          {/* 5. Presupuesto y pago */}
           <section className="card p-5">
-            {step(4, "Método de pago preferido", true)}
+            {step(5, "Presupuesto y pago", true)}
+            <div className="text-sm font-semibold">Presupuesto (opcional)</div>
+            <div className="mt-2 grid gap-3 sm:grid-cols-[1fr_auto]">
+              <MoneyInput name="presupuesto" value={budget} onChange={(v) => { setBudget(v); setErr({ ...err, budget: "" }); }} placeholder="Ej. 80.000" ariaLabel="Presupuesto" />
+              <div className="flex rounded-2xl bg-surface p-1 ring-1 ring-line" role="radiogroup" aria-label="Tipo de presupuesto">
+                {([["estimado", "Estimado"], ["maximo", "Máximo"]] as const).map(([k, l]) => (
+                  <button key={k} type="button" role="radio" aria-checked={budgetType === k} onClick={() => setBudgetType(k)}
+                    className={cx("flex-1 rounded-xl px-4 py-2 text-sm font-semibold", budgetType === k ? "bg-white text-brand shadow-sm" : "text-ink-soft")}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {errText("budget")}
+            <p className="mt-2 text-xs text-ink-soft">Los proveedores lo verán para decidir si te envían una propuesta. No es el precio final: ese se acuerda en la negociación.</p>
+            <div className="mb-3 mt-5 text-sm font-semibold">Método de pago preferido</div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {(Object.keys(PAYMENTS) as PaymentMethod[]).map((m) => {
                 const Icon = PAYMENT_ICON[m];
@@ -529,7 +566,7 @@ export function Publish() {
         <aside className="hidden lg:block">
           <div className="card sticky top-24 space-y-4 p-5 text-sm">
             <div className="flex items-center gap-2 font-bold text-brand"><LuRadar className="h-5 w-5" /> Vista previa del algoritmo</div>
-            <p className="text-ink-soft">{preview == null ? "Elige la subcategoría y el municipio para ver cuántos proveedores pueden atenderte." : <><b className="text-2xl text-ink">{preview}</b><br />proveedores de {serviceById(service).name.toLowerCase()} cubren {ubic.municipio ? "este municipio" : "esta zona"}.</>}</p>
+            <p className="text-ink-soft">{preview == null ? "Elige la subcategoría y el municipio para ver cuántos proveedores pueden atenderte." : <><b className="text-2xl text-ink">{preview}</b><br />proveedores de {serviceById(service).name.toLowerCase()} cubren {ubic.municipio ? "este municipio" : "esta zona"} y atienden el {fecha ? shortDate(fecha) : "día elegido"} a las {hora ? clock(new Date(`2000-01-01T${hora}:00`).getTime()) : "hora elegida"}.</>}</p>
             <ul className="space-y-2 border-t border-line pt-4 text-ink-soft">
               <li className="flex gap-2"><LuShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Solo se notifica a proveedores de esa subcategoría cuya zona de cobertura incluye el lugar del servicio.</li>
               <li className="flex gap-2"><LuMapPin className="mt-0.5 h-4 w-4 shrink-0 text-brand" /> Los proveedores ven solo el municipio y una zona aproximada. Tu dirección exacta solo la ve el proveedor que contrates.</li>
@@ -615,7 +652,7 @@ export function Searching({ id }: { id: string }) {
                 <>
                   <div className="flex items-center gap-3">
                     <div className="flex -space-x-3">{apps.slice(0, 4).map((a) => { const p = getProvider(a.providerId); return p ? <Avatar key={a.providerId} name={p.name} photo={p.photo} size={40} /> : null; })}</div>
-                    <div className="font-bold">{apps.length === 0 ? "Aún no hay postulaciones. Te avisaremos cuando un proveedor se postule." : `${apps.length} proveedor${apps.length > 1 ? "es" : ""} se postularon`}</div>
+                    <div className={cx("font-bold", apps.length && "text-[#166534]")}>{apps.length === 0 ? "Aún no hay postulaciones. Te avisaremos cuando un proveedor se postule." : `${apps.length} proveedor${apps.length > 1 ? "es" : ""} se postularon`}</div>
                   </div>
                   <Button className="mt-4 w-full" icon={LuArrowRight} onClick={() => navigate("/proveedores/" + r.id)}>Ver y comparar ofertas</Button>
                 </>
@@ -632,7 +669,7 @@ export function Searching({ id }: { id: string }) {
 //  Proveedores compatibles (postulaciones ordenadas por calificación)
 // =====================================================================
 export function CompatibleProviders({ id }: { id: string }) {
-  const { findRequest, getProvider, visibleApplicants } = useStore();
+  const { findRequest, getProvider, visibleApplicants, openConversation } = useStore();
   const r = findRequest(id);
   const [sort, setSort] = useState<"price" | "rating" | "distance">("price");
   const [nowOnly, setNowOnly] = useState(false);
@@ -645,6 +682,9 @@ export function CompatibleProviders({ id }: { id: string }) {
     .filter((x) => !nowOnly || x.av === "ahora")
     .sort((x, y) => (sort === "price" ? x.a.price - y.a.price : sort === "rating" ? (y.p.reviews ? y.p.rating : 0) - (x.p.reviews ? x.p.rating : 0) : x.d - y.d));
   const minPrice = Math.min(...apps.map((a) => a.price));
+  // Última propuesta formal de cada proveedor (la negociación ocurre en el chat)
+  const formal = (pid: string) => [...r.proposals].reverse().find((x) => x.providerId === pid && x.kind === "contratacion");
+  const chat = async (pid: string) => navigate("/chat/" + (await openConversation({ provider: pid })));
 
   return (
     <AppShell>
@@ -655,6 +695,14 @@ export function CompatibleProviders({ id }: { id: string }) {
         <Chip active={sort === "distance"} onClick={() => setSort("distance")}>Más cercanos</Chip>
         <Chip active={nowOnly} onClick={() => setNowOnly(!nowOnly)}>Disponible ahora</Chip>
       </div>
+      <div className="mt-4 flex flex-wrap gap-2 text-sm">
+        {r.date && r.time && <Badge tone="soft" icon={LuCalendarDays}>{agreementWhen(r.date, r.time)}</Badge>}
+        {r.budget ? <Badge tone="soft" icon={LuWallet}>Tu presupuesto {r.budgetType === "maximo" ? "máximo" : "estimado"}: {money(r.budget)}</Badge> : null}
+        <Badge tone="postulacion" icon={LuUsers}>{apps.length} postulacion{apps.length === 1 ? "" : "es"}</Badge>
+      </div>
+      {r.status === "buscando" && apps.length > 0 && (
+        <p className="mt-3 rounded-2xl bg-brand-50 p-4 text-sm text-ink-soft"><b className="text-ink">¿Cómo contratar?</b> Conversa con los proveedores para aclarar detalles y negociar. Cuando un proveedor te envíe su <b className="text-ink">propuesta formal</b> (precio final, fecha, hora, lugar y condiciones), acéptala desde el chat y quedará el acuerdo.</p>
+      )}
       {r.status !== "buscando" && (
         <div className="mt-4 rounded-2xl bg-ok-50 p-4 text-sm font-semibold text-ok">Esta solicitud ya tiene un acuerdo. <Link to={"/solicitud/" + r.id} className="underline">Ver detalle</Link></div>
       )}
@@ -663,16 +711,17 @@ export function CompatibleProviders({ id }: { id: string }) {
         <div className="card mt-5 overflow-x-auto p-0">
           <table className="w-full min-w-[560px] text-left text-sm" data-testid="comparar-ofertas">
             <thead className="bg-surface text-ink-soft">
-              <tr><th className="px-4 py-3 font-semibold">Proveedor</th><th className="px-4 py-3 font-semibold">Precio propuesto</th><th className="px-4 py-3 font-semibold">Calificación</th><th className="px-4 py-3 font-semibold">Distancia</th><th className="px-4 py-3" /></tr>
+              <tr><th className="px-4 py-3 font-semibold">Proveedor</th><th className="px-4 py-3 font-semibold">Oferta inicial</th><th className="px-4 py-3 font-semibold">Propuesta formal</th><th className="px-4 py-3 font-semibold">Calificación</th><th className="px-4 py-3 font-semibold">Distancia</th><th className="px-4 py-3" /></tr>
             </thead>
             <tbody className="divide-y divide-line">
               {rows.map(({ a, p, d }) => (
                 <tr key={p.id}>
                   <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={p.name} photo={p.photo} size={36} /><div><div className="flex flex-wrap items-center gap-1.5 font-semibold">{p.company}{p.test && <TestBadge />}</div><div className="text-xs text-ink-soft">{p.name}</div></div></div></td>
-                  <td className="px-4 py-3 font-extrabold">{money(a.price)}{a.price === minPrice && <Badge tone="ok" className="ml-2 px-2 py-0.5 text-[11px]">Menor</Badge>}</td>
+                  <td className="px-4 py-3 font-extrabold">{money(a.price)}{a.price === minPrice && <Badge tone="insignia" className="ml-2 px-2 py-0.5 text-[11px]">Menor precio</Badge>}</td>
+                  <td className="px-4 py-3">{(() => { const f = formal(p.id); return f ? <span className={cx("font-bold", f.status === "pendiente" ? "text-[#166534]" : "text-ink-soft")}>{money(f.price)} <span className="text-xs font-semibold">· {PROPOSAL_STATUS[f.status]}</span></span> : <span className="text-ink-soft">Aún no</span>; })()}</td>
                   <td className="px-4 py-3"><Rating value={p.rating} count={p.reviews} /></td>
                   <td className="px-4 py-3 text-ink-soft">{d.toFixed(1)} km</td>
-                  <td className="px-4 py-3 text-right">{r.status === "buscando" && <Link to={`/acuerdo/${r.id}/${p.id}`} className="font-bold text-brand">Elegir</Link>}</td>
+                  <td className="px-4 py-3 text-right"><button onClick={() => chat(p.id)} className="font-bold text-brand">Conversar</button></td>
                 </tr>
               ))}
             </tbody>
@@ -696,10 +745,20 @@ export function CompatibleProviders({ id }: { id: string }) {
                   {av === "ahora" ? <LuCircleCheck className="h-4 w-4" /> : <LuCircleDot className="h-4 w-4" />}{availabilityLabel[av]}
                 </div>
                 <div className="mt-2 text-2xl font-extrabold text-brand">{money(a.price)}</div>
-                <div className="text-xs text-ink-soft">Propuesta enviada {timeAgo(a.at).toLowerCase()}</div>
+                <div className="text-xs text-ink-soft">Oferta inicial · {timeAgo(a.at).toLowerCase()}</div>
               </div>
             </div>
             {a.note && <p className="mt-3 rounded-2xl bg-surface p-3 text-sm text-ink-soft">“{a.note}”</p>}
+            {(() => {
+              const f = formal(p.id);
+              if (!f) return null;
+              return (
+                <div className={cx("mt-3 rounded-2xl p-3 text-sm", f.status === "pendiente" ? TONE.postulacion : "bg-surface text-ink-soft")}>
+                  <div className="font-bold">Propuesta formal: {money(f.price)} · {PROPOSAL_STATUS[f.status]}</div>
+                  <div>{agreementWhen(f.date, f.time)} · {f.address}</div>
+                </div>
+              );
+            })()}
             {p.portfolio.length > 0 && (
               <button type="button" onClick={() => navigate(`/proveedor/${p.id}?sol=${r.id}`)} className="mt-3 grid w-full grid-cols-3 gap-1.5" aria-label={`Ver trabajos de ${p.name}`}>
                 {p.portfolio.slice(0, 3).map((src) => <img key={src} src={src} alt="Trabajo del proveedor" className="aspect-[4/3] w-full rounded-lg object-cover" />)}
@@ -707,7 +766,7 @@ export function CompatibleProviders({ id }: { id: string }) {
             )}
             <div className="mt-4 grid grid-cols-2 gap-2">
               <Button variant="soft" onClick={() => navigate(`/proveedor/${p.id}?sol=${r.id}`)}>Ver perfil</Button>
-              {r.status === "buscando" ? <Button onClick={() => navigate(`/acuerdo/${r.id}/${p.id}`)}>Elegir</Button> : <span />}
+              <Button icon={LuMessageCircle} onClick={() => chat(p.id)}>{formal(p.id)?.status === "pendiente" ? "Ver propuesta" : "Conversar"}</Button>
             </div>
           </div>
         ))}
@@ -723,7 +782,7 @@ export function CompatibleProviders({ id }: { id: string }) {
 //  Perfil del proveedor / Selección del proveedor
 // =====================================================================
 export function ProviderProfile({ id }: { id: string }) {
-  const { getProvider, loadProvider, findRequest, openConversation, toast, mode, myProvider, zona } = useStore();
+  const { getProvider, loadProvider, findRequest, openConversation, toast, mode, myProvider, zona, myRequests } = useStore();
   const sol = query().get("sol");
   const r = sol ? findRequest(sol) : undefined;
   const [tab, setTab] = useState<"info" | "portafolio" | "resenas">(r ? "portafolio" : "info");
@@ -745,11 +804,11 @@ export function ProviderProfile({ id }: { id: string }) {
   const reviews = p.resenas ?? [];
   const isMe = myProvider?.id === p.id;
 
+  // El cliente solo puede escribirle a un proveedor que se postuló a una de sus solicitudes (o con quien tiene un acuerdo)
+  const canChat = myRequests.some((x) => x.providerId === p.id || x.applicants.some((a) => a.providerId === p.id));
   const chat = async () => { const c = await openConversation({ provider: p.id }); navigate("/chat/" + c); };
-  const hire = () => {
-    if (r && r.status === "buscando") navigate(`/acuerdo/${r.id}/${p.id}`);
-    else navigate(`/publicar?servicio=${p.services[0]}`);
-  };
+  const solicitar = () => navigate(`/publicar?servicio=${p.catalog?.[0]?.service ?? p.services[0]}`);
+  const noChatHint = "Publica tu necesidad: podrás conversar con este proveedor cuando se postule.";
 
   const info = (
     <div className="space-y-5">
@@ -770,6 +829,16 @@ export function ProviderProfile({ id }: { id: string }) {
         <div className="text-lg font-bold">Sobre mí</div>
         <p className="mt-1 text-ink-soft">{p.about}</p>
       </div>
+      {(p.links?.length ?? 0) > 0 && (
+        <div className="border-t border-line pt-4">
+          <div className="text-lg font-bold">Enlaces</div>
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {p.links!.map((l) => (
+              <li key={l.url}><a href={l.url} target="_blank" rel="noreferrer nofollow" className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-sm font-semibold text-brand ring-1 ring-line hover:ring-brand/40"><LuExternalLink className="h-4 w-4" />{l.label || LINK_TYPES[l.type]}</a></li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
   const portfolio = (
@@ -781,6 +850,29 @@ export function ProviderProfile({ id }: { id: string }) {
           {app.note && <p className="mt-1 text-ink-soft">“{app.note}”</p>}
         </div>
       )}
+      {(p.catalog?.length ?? 0) > 0 && (
+        <div className="mb-6">
+          <div className="mb-3 text-lg font-bold">Catálogo de servicios</div>
+          <div className="space-y-3">
+            {p.catalog!.map((it) => (
+              <div key={it.id} className="flex gap-3 rounded-2xl p-3 ring-1 ring-line">
+                {it.photos[0] ? (
+                  <button type="button" onClick={() => setZoomImg(photoSrc(it.photos[0])!)} className="shrink-0 overflow-hidden rounded-xl" aria-label={`Ver foto de ${it.title}`}>
+                    <img src={photoSrc(it.photos[0])} alt={it.title} className="h-24 w-28 object-cover" />
+                  </button>
+                ) : null}
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold">{it.title}</div>
+                  <div className="text-sm font-semibold text-brand">{it.priceMin != null ? (it.priceMax != null && it.priceMax !== it.priceMin ? `${money(it.priceMin)} – ${money(it.priceMax)}` : money(it.priceMin)) : "Precio a convenir"}</div>
+                  <p className="mt-0.5 text-sm text-ink-soft">{it.description}</p>
+                  {it.conditions && <p className="mt-1 text-xs text-ink-soft"><b>Condiciones:</b> {it.conditions}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {p.portfolio.length > 0 && <div className="mb-3 text-lg font-bold">Trabajos realizados</div>}
       {p.portfolio.length > 0 ? (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{p.portfolio.map((src) => (
@@ -835,20 +927,31 @@ export function ProviderProfile({ id }: { id: string }) {
           <div className="text-lg font-semibold text-brand">{p.company}</div>
           {p.test && <TestBadge className="mt-1" />}
           <div className="mt-1"><Rating value={p.rating} count={p.reviews} className="text-lg" />{p.reviews > 0 && <span className="text-ink-soft"> reseñas</span>}</div>
-          {p.verified && <Badge tone="ok" icon={LuCircleCheck} className="mt-2 px-4 py-1.5 text-base">Verificado</Badge>}
+          {p.verified && <Badge tone="insignia" icon={LuCircleCheck} className="mt-2 px-4 py-1.5 text-base">Verificado</Badge>}
           <div className="mt-3 flex flex-wrap justify-center gap-2">
             <Badge tone="brand" icon={LuMapPin} className="px-4 py-2 text-base">{d != null ? `${app ? "A" : "≈"} ${d.toFixed(1)} km` : p.city.split(",")[0]}</Badge>
             <Badge tone={av === "otro" ? "warn" : "ok"} icon={LuCircleDot} className="px-4 py-2 text-base">{availabilityLabel[av]}</Badge>
           </div>
-          <div className="mt-6 hidden gap-3 lg:grid">
-            {!isMe && <Button onClick={hire} className="w-full py-4 text-lg" icon={r ? LuMessageCircle : undefined}>{r ? "Contratar" : "Contactar"}</Button>}
-            {!isMe && <div className="grid grid-cols-2 gap-3"><Button variant="outline" icon={LuPhone} onClick={() => setPhone(true)}>Llamar</Button><Button variant="outline" icon={LuMessageCircle} onClick={chat}>Mensaje</Button></div>}
-          </div>
+          {!isMe && (
+            <div className="mt-6 hidden gap-3 lg:grid">
+              {canChat ? (
+                <>
+                  <Button onClick={chat} className="w-full py-4 text-lg" icon={LuMessageCircle}>Conversar y negociar</Button>
+                  <Button variant="outline" icon={LuPhone} onClick={() => setPhone(true)}>Llamar</Button>
+                </>
+              ) : (
+                <>
+                  <Button onClick={solicitar} className="w-full py-4 text-lg">Solicitar este servicio</Button>
+                  <p className="text-sm text-ink-soft">{noChatHint}</p>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="lg:card lg:p-8">
           <div className="flex border-b border-line">
-            {([["info", "Información"], ["portafolio", r ? "Portafolio" : "Servicios"], ["resenas", "Reseñas"]] as const).map(([k, l]) => (
+            {([["info", "Información"], ["portafolio", "Servicios y trabajos"], ["resenas", "Reseñas"]] as const).map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} className={cx("relative flex-1 pb-3 text-lg font-bold transition", tab === k ? "text-brand" : "text-ink-soft")}>
                 {l}{tab === k && <span className="absolute inset-x-[10%] -bottom-px h-[3px] rounded-full bg-brand" />}
               </button>
@@ -861,17 +964,16 @@ export function ProviderProfile({ id }: { id: string }) {
       {/* Acciones fijas en móvil */}
       {!isMe && mode === "cliente" && (
         <div className="sticky bottom-0 -mx-4 mt-6 bg-gradient-to-t from-surface via-surface to-transparent px-4 pb-5 pt-6 lg:hidden">
-          {r ? (
-            <div className="grid grid-cols-[1fr_1.4fr] gap-3">
+          {canChat ? (
+            <div className="grid grid-cols-[1fr_1.6fr] gap-3">
               <Button variant="soft" icon={LuPhone} className="py-4 text-lg" onClick={() => setPhone(true)}>Llamar</Button>
-              <Button icon={LuMessageCircle} className="py-4 text-lg" onClick={hire}>Contratar</Button>
+              <Button icon={LuMessageCircle} className="py-4 text-lg" onClick={chat}>Conversar</Button>
             </div>
           ) : (
-            <div className="flex gap-3">
-              <Button className="flex-1 py-4 text-lg" onClick={hire}>Contactar</Button>
-              <Button variant="outline" className="w-16 px-0" onClick={() => setPhone(true)} aria-label="Llamar"><LuPhone className="h-6 w-6 text-brand" /></Button>
-              <Button variant="outline" className="w-16 px-0" onClick={chat} aria-label="Mensaje"><LuMessageCircle className="h-6 w-6 text-brand" /></Button>
-            </div>
+            <>
+              <Button className="w-full py-4 text-lg" onClick={solicitar}>Solicitar este servicio</Button>
+              <p className="mt-2 text-center text-xs text-ink-soft">{noChatHint}</p>
+            </>
           )}
         </div>
       )}
@@ -893,126 +995,39 @@ export function ProviderProfile({ id }: { id: string }) {
 //  Acuerdo digital: Propuesta → Acuerdo → Confirmación
 // =====================================================================
 export function AgreementFlow({ rid, pid }: { rid: string; pid: string }) {
-  const { findRequest, getProvider, confirmAgreement, openConversation } = useStore();
-  const r = findRequest(rid);
-  const p = getProvider(pid);
-  const [busy, wrap] = useBusy();
-  const app = r?.applicants.find((a) => a.providerId === pid);
-  const [step, setStep] = useState(0);
-  const [day, setDay] = useState(0);
-  const [time, setTime] = useState("15:00");
-  const [accept, setAccept] = useState(false);   // nunca premarcada
-  const [contract, setContract] = useState(false);
-  if (!r || !p) return <NotFoundReq />;
-  if (!app) return (
-    <AppShell hideNav><Empty icon={LuUsers} title="Este proveedor no se ha postulado" text="Solo puedes contratar a proveedores que enviaron una propuesta a tu solicitud."
-      action={<Button onClick={() => navigate("/proveedores/" + r.id)}>Ver ofertas recibidas</Button>} /></AppShell>
-  );
-  const price = app.price;
-  const date = localISO(Date.now() + day * 86400000);
-  const slots = Array.from({ length: Math.max(0, Math.min(p.schedule.to, 23) - p.schedule.from) }, (_, i) => p.schedule.from + i)
-    .filter((h) => day > 0 || h > new Date().getHours())
-    .map((h) => String(h).padStart(2, "0") + ":00");
-  const done = step === 2 && r.agreement;
-
-  const rows = [
-    [LuWrench, "Servicio", r.title],
-    [LuUserRound, "Proveedor", p.name],
-    [LuCalendarDays, "Fecha y hora", agreementWhen(date, time)],
-    [LuMapPin, "Ubicación", r.location.label],
-    [LuCircleDollarSign, "Costo acordado", money(price)],
-    [LuCreditCard, "Método de pago", PAYMENTS[r.payment]],
-  ] as const;
-
-  return (
-    <AppShell hideNav>
-      <PageHeader title="Detalle del servicio" back={step === 0 ? `/proveedor/${pid}?sol=${rid}` : false} />
-      <div className="mx-auto max-w-2xl">
-        <Stepper steps={["Propuesta", "Acuerdo", "Confirmación"]} current={step} />
-
-        {step === 0 && (
-          <div className="card animate-fade-up mt-7 p-6">
-            <div className="flex items-center gap-4">
-              <Avatar name={p.name} photo={p.photo} size={64} verified={p.verified} />
-              <div><div className="text-xl font-extrabold">{p.name}</div><Rating value={p.rating} count={p.reviews} /></div>
-              <div className="ml-auto text-right"><div className="text-sm text-ink-soft">Propuesta</div><div className="text-2xl font-extrabold text-brand">{money(price)}</div></div>
-            </div>
-            {app?.note && <p className="mt-4 rounded-2xl bg-surface p-4 text-ink-soft">“{app.note}”</p>}
-            <div className="mt-6 font-bold">¿Qué día?</div>
-            <div className="mt-2 flex gap-2 overflow-x-auto scrollbar-none">
-              {[0, 1, 2, 3, 4, 7, 30].map((dd) => (
-                <Chip key={dd} active={day === dd} onClick={() => setDay(dd)}>
-                  {dd === 0 ? "Hoy" : dd === 1 ? "Mañana" : new Date(Date.now() + dd * 86400000).toLocaleDateString("es-CO", { weekday: "short", day: "numeric", month: "short" })}
-                </Chip>
-              ))}
-            </div>
-            {day >= 2 && <p className="mt-2 text-xs text-ink-soft">Los servicios programados a futuro generan un contrato digital automático con la fecha pactada.</p>}
-            <div className="mt-5 font-bold">¿A qué hora?</div>
-            <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-6">
-              {slots.length === 0 && <p className="col-span-full text-sm text-ink-soft">No hay horarios disponibles hoy. Elige otro día.</p>}
-              {slots.map((s) => (
-                <button key={s} onClick={() => setTime(s)} className={cx("rounded-xl py-2.5 text-sm font-semibold", time === s ? "bg-brand text-white" : "bg-surface hover:bg-brand-50")}>{clock(new Date(`2000-01-01T${s}:00`).getTime())}</button>
-              ))}
-            </div>
-            <Button className="mt-6 w-full py-4 text-lg" disabled={!slots.includes(time)} onClick={() => setStep(1)}>Continuar</Button>
-          </div>
-        )}
-
-        {step >= 1 && (
-          <div className="card animate-fade-up mt-7 p-6">
-            <h2 className="text-2xl font-extrabold">{done ? "¡Acuerdo confirmado!" : "Resumen del acuerdo"}</h2>
-            {done && <p className="mt-1 text-ink-soft">Código del contrato digital: <b className="text-ink">{r.agreement!.code}</b></p>}
-            <div className="mt-4 divide-y divide-line">
-              {rows.map(([I, k, v]) => (
-                <div key={k} className="flex items-center gap-4 py-3.5">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-50"><I className="h-5 w-5" /></span>
-                  <span className="w-28 shrink-0 text-ink-soft sm:w-40">{k}</span>
-                  <span className="min-w-0 flex-1 font-medium">{v}</span>
-                </div>
-              ))}
-            </div>
-            {step === 1 && (
-              <>
-                <label className="mt-4 flex cursor-pointer items-center gap-4 rounded-2xl bg-surface p-4">
-                  <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} className="h-7 w-7 shrink-0 accent-brand" />
-                  <span className="text-ink-soft">Leí el <button type="button" className="font-semibold text-brand underline" onClick={() => setContract(true)}>contrato digital</button> y confirmo la contratación con {p.name.split(" ")[0]} por {money(price)}.</span>
-                </label>
-                <Button className="mt-5 w-full py-4 text-lg" disabled={!accept || busy} onClick={() => wrap(async () => { await confirmAgreement(r.id, p.id, date, time, price); setStep(2); })}>{busy ? "Guardando acuerdo…" : "Confirmar acuerdo"}</Button>
-                <button onClick={() => setStep(0)} className="mt-3 w-full text-sm font-semibold text-ink-soft">Cambiar fecha u hora</button>
-              </>
-            )}
-            {done && (
-              <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                <Button variant="soft" icon={LuFileText} onClick={() => setContract(true)}>Ver contrato</Button>
-                <Button icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ provider: p.id })))}>Escribir a {p.name.split(" ")[0]}</Button>
-                <Button variant="outline" className="sm:col-span-2" onClick={() => navigate("/solicitudes")}>Ir a mis solicitudes</Button>
-              </div>
-            )}
-            <div className="mt-5 flex items-center gap-3 text-sm text-ink-soft">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface"><LuShieldCheck className="h-6 w-6 text-[#b08900]" /></span>
-              Tu información está protegida por la Ley de Habeas Data (Ley 1581 de 2012).
-            </div>
-          </div>
-        )}
-      </div>
-      <ContractModal open={contract} onClose={() => setContract(false)} r={r} p={p} date={date} time={time} price={price} code={r.agreement?.code} />
-    </AppShell>
-  );
+  // La contratación ya no es directa: se negocia en el chat y se formaliza al aceptar una propuesta formal
+  const { openConversation } = useStore();
+  const [err, setErr] = useState("");
+  useEffect(() => { openConversation({ provider: pid }).then((c) => navigate("/chat/" + c, true)).catch((e) => setErr(e.message)); }, [rid, pid]);
+  return <AppShell hideNav>{err ? <Empty icon={LuMessageCircle} title="No se pudo abrir el chat" text={err} /> : <div className="card mx-auto h-40 max-w-xl animate-pulse" />}</AppShell>;
 }
 
 export function ContractModal({ open, onClose, r, p, date, time, price, code }: { open: boolean; onClose: () => void; r: Request; p: Provider; date: string; time: string; price: number; code?: string }) {
   const { clientInfo } = useStore();
+  const ag = r.agreement;
+  const historial = r.proposals.filter((x) => x.status === "aceptada" || (x.kind === "modificacion" && x.status !== "pendiente"));
   return (
     <Modal open={open} onClose={onClose} title="Contrato digital de servicio">
       <div className="space-y-3 text-sm leading-relaxed text-ink-soft">
-        <p><b className="text-ink">Código:</b> {code ?? "Se asigna al confirmar"}</p>
+        <p><b className="text-ink">Código:</b> {code ?? "Se asigna al aceptar la propuesta"}</p>
         <p><b className="text-ink">Partes:</b> {clientInfo(r.clientKey).name} (cliente) y {p.name} – {p.company} (proveedor).</p>
-        <p><b className="text-ink">Objeto:</b> {r.desc}</p>
-        <p><b className="text-ink">Fecha pactada:</b> {agreementWhen(date, time)} en {r.location.label}. <b className="text-ink">Valor:</b> {money(price)} pagado en {PAYMENTS[r.payment].toLowerCase()}.</p>
-        <p><b className="text-ink">1. Puntualidad y flexibilidad.</b> Si el proveedor se retrasa y el servicio no es urgente, el cliente puede otorgar un plazo adicional de hasta dos (2) días. El incumplimiento del plazo inicial queda registrado con una valoración negativa de puntualidad.</p>
-        <p><b className="text-ink">2. Faltas graves (regla de “Tres Strikes”).</b> No realizar un trabajo acordado (proveedor) o no efectuar el pago (cliente) constituye una falta grave. Al acumular tres faltas la cuenta podrá ser suspendida definitivamente.</p>
-        <p><b className="text-ink">3. Calificación mutua.</b> Al finalizar, ambas partes se califican; la reputación afecta la visibilidad en las búsquedas.</p>
-        <p><b className="text-ink">4. Datos personales.</b> Tratamiento conforme a la Ley 1581 de 2012 (Habeas Data).</p>
+        <p><b className="text-ink">Servicio acordado:</b> {ag?.service || r.desc}</p>
+        <p><b className="text-ink">Fecha y hora:</b> {agreementWhen(date, time)}. <b className="text-ink">Lugar:</b> {ag?.address || r.location.label}.</p>
+        <p><b className="text-ink">Valor:</b> {money(price)}, pagado en {PAYMENTS[r.payment].toLowerCase()}.</p>
+        {ag?.conditions && <p><b className="text-ink">Condiciones:</b> {ag.conditions}</p>}
+        {ag?.modifiedAt && <p className="rounded-xl bg-surface p-3"><b className="text-ink">Última modificación aceptada:</b> {shortDate(ag.modifiedAt)} · {clock(ag.modifiedAt)}</p>}
+        <p><b className="text-ink">1. Modificaciones.</b> Cualquier cambio al servicio, precio, fecha, hora o lugar se propone por el chat y solo es válido cuando la otra parte lo acepta. Todos los cambios quedan registrados.</p>
+        <p><b className="text-ink">2. Puntualidad y flexibilidad.</b> Si el proveedor se retrasa y el servicio no es urgente, el cliente puede otorgar un plazo adicional de hasta dos (2) días.</p>
+        <p><b className="text-ink">3. Faltas graves (regla de “Tres Strikes”).</b> No realizar un trabajo acordado (proveedor) o cancelar sin justificación (cliente) constituye una falta grave. Con tres faltas la cuenta podrá ser suspendida.</p>
+        <p><b className="text-ink">4. Calificación mutua</b> y <b className="text-ink">5. Datos personales</b> conforme a la Ley 1581 de 2012.</p>
+        {historial.length > 0 && (
+          <div>
+            <b className="text-ink">Historial de propuestas aceptadas o respondidas</b>
+            <ul className="mt-1 space-y-1">
+              {historial.map((x) => <li key={x.id}>• {shortDate(x.at)} — {x.kind === "contratacion" ? "Contratación" : "Cambio"}: {money(x.price)}, {agreementWhen(x.date, x.time)} ({x.status})</li>)}
+            </ul>
+          </div>
+        )}
       </div>
       <Button className="mt-5 w-full" onClick={onClose}>Entendido</Button>
     </Modal>
@@ -1057,10 +1072,14 @@ export function RateService({ id }: { id: string }) {
 // =====================================================================
 //  Mis solicitudes
 // =====================================================================
+export const PROPOSAL_STATUS: Record<string, string> = {
+  pendiente: "esperando tu respuesta", aceptada: "aceptada", rechazada: "rechazada", reemplazada: "reemplazada por una nueva", retirada: "retirada",
+};
+
 const STATUS_BADGE = {
   buscando: { tone: "warn" as const, icon: LuRadar, label: "Buscando" },
   en_curso: { tone: "brand" as const, icon: LuClock, label: "En curso" },
-  completada: { tone: "ok" as const, icon: LuCircleCheck, label: "Completado" },
+  completada: { tone: "completado" as const, icon: LuCircleCheck, label: "Completado" },
   cancelada: { tone: "bad" as const, icon: LuCircleX, label: "Cancelada" },
 };
 
@@ -1099,7 +1118,7 @@ export function MyRequests() {
                 {r.photo ? <img src={r.photo} alt="" className="h-24 w-24 rounded-2xl object-cover sm:h-28 sm:w-28" /> : (
                   <span className="flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-2xl bg-brand-50 text-brand">{(() => { const I = SERVICE_ICON[r.service]; return <I className="h-12 w-12" />; })()}</span>
                 )}
-                {r.status !== "cancelada" && <span className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full bg-ok ring-[3px] ring-white" />}
+                {r.status !== "cancelada" && <span className={cx("absolute -bottom-1 -right-1 h-5 w-5 rounded-full ring-[3px] ring-white", r.status === "completada" ? DOT.completado : r.applicants.length ? DOT.postulacion : "bg-brand-blue")} />}
               </div>
               <div className="min-w-0 flex-1 space-y-1.5">
                 <div className="text-lg font-extrabold leading-tight">{r.title}</div>
@@ -1160,11 +1179,25 @@ export function RequestDetail({ id }: { id: string }) {
             <Info icon={LuMapPin} k="Ubicación" v={r.location.label} />
             <Info icon={LuLocateFixed} k="Punto para el emparejamiento" v={r.gps ? `GPS exacto (±${r.gpsPrecision ?? "?"} m)` : "Centro del municipio"} />
             <Info icon={LuCreditCard} k="Método de pago" v={PAYMENTS[r.payment]} />
+            {r.date && r.time && <Info icon={LuCalendarDays} k="Fecha y hora solicitadas" v={agreementWhen(r.date, r.time)} />}
+            {r.budget ? <Info icon={LuWallet} k={r.budgetType === "maximo" ? "Presupuesto máximo" : "Presupuesto estimado"} v={money(r.budget)} /> : null}
             <Info icon={LuCalendarDays} k="Publicada" v={`${shortDate(r.createdAt)} · ${clock(r.createdAt)}`} />
             <Info icon={LuUsers} k="Proveedores notificados" v={`${r.matchedCount} compatibles`} />
             {r.agreement && <Info icon={LuClock} k="Fecha pactada" v={agreementWhen(r.agreement.date, r.agreement.time) + (r.agreement.extendedDays ? ` (+${r.agreement.extendedDays} días)` : "")} />}
             {r.agreement && <Info icon={LuCircleDollarSign} k="Costo acordado" v={money(r.agreement.price)} />}
           </dl>
+          {r.agreement?.service && (
+            <div className="mt-5 rounded-2xl p-4 ring-1 ring-line">
+              <div className="text-sm font-bold text-ink-soft">Condiciones acordadas</div>
+              <p className="mt-1">{r.agreement.service}</p>
+              {r.agreement.address && <p className="mt-1 text-sm text-ink-soft"><b>Lugar:</b> {r.agreement.address}</p>}
+              {r.agreement.conditions && <p className="mt-1 text-sm text-ink-soft"><b>Condiciones:</b> {r.agreement.conditions}</p>}
+              {r.agreement.modifiedAt && <p className="mt-1 text-xs text-ink-soft">Modificado y aceptado el {shortDate(r.agreement.modifiedAt)}</p>}
+            </div>
+          )}
+          {r.proposals.some((x) => x.kind === "modificacion" && x.status === "pendiente") && (
+            <div className={cx("mt-4 rounded-2xl p-3 text-sm font-semibold", TONE.postulacion)}>Hay un cambio al acuerdo esperando respuesta. Revísalo en el chat.</div>
+          )}
           <Mapa className="mt-5 h-56" center={r.location} point={r.location} zoom={r.gps ? 16 : 14} />
           {r.punctualityPenalty && <div className="mt-4 flex items-center gap-2 rounded-2xl bg-[#fff4dc] p-3 text-sm font-medium text-[#9a5b00]"><LuTriangleAlert className="h-5 w-5" /> Se otorgó un plazo adicional de 2 días y se registró una valoración negativa de puntualidad al proveedor.</div>}
           {r.rating && (
@@ -1184,13 +1217,13 @@ export function RequestDetail({ id }: { id: string }) {
                 <Avatar name={p.name} photo={p.photo} size={56} verified={p.verified} />
                 <div><div className="font-extrabold">{p.name}</div><Rating value={p.rating} count={p.reviews} className="text-sm" /></div>
               </Link>
-              <Button variant="soft" icon={LuMessageCircle} className="mt-4 w-full" onClick={async () => navigate("/chat/" + (await openConversation({ provider: p.id })))}>Enviar mensaje</Button>
+              <Button variant="soft" icon={LuMessageCircle} className="mt-4 w-full" onClick={async () => navigate("/chat/" + (await openConversation({ provider: p.id })))}>Abrir chat</Button>
             </div>
           )}
           <div className="card space-y-3 p-5">
             {r.status === "buscando" && (
               <>
-                <div className="font-bold">{visibleApplicants(r).length} postulaciones recibidas</div>
+                <Badge tone="postulacion" icon={LuUsers}>{visibleApplicants(r).length} postulaciones recibidas</Badge>
                 <Button className="w-full" onClick={() => navigate("/proveedores/" + r.id)}>Ver y comparar ofertas</Button>
                 <Button variant="outline" className="w-full" onClick={() => setEdit(true)}>Editar solicitud</Button>
                 <Button variant="danger" className="w-full" disabled={busy} onClick={() => wrap(async () => { await cancelRequest(r.id, false); toast("Solicitud cancelada"); })}>Cancelar solicitud</Button>
@@ -1200,6 +1233,7 @@ export function RequestDetail({ id }: { id: string }) {
               <>
                 <Button className="w-full" icon={LuCircleCheck} onClick={() => navigate("/calificar/" + r.id)}>El servicio finalizó · Calificar</Button>
                 <Button variant="soft" className="w-full" icon={LuFileText} onClick={() => setContract(true)}>Ver contrato {r.agreement?.code}</Button>
+                {p && <Button variant="outline" className="w-full" icon={LuMessageCircle} onClick={async () => navigate("/chat/" + (await openConversation({ provider: p.id })))}>Proponer un cambio</Button>}
                 {!r.punctualityPenalty && <Button variant="outline" className="w-full" icon={LuClock} onClick={() => setLate(true)}>El proveedor se retrasó</Button>}
                 <Button variant="danger" className="w-full" onClick={() => setCancel(true)}>Cancelar acuerdo</Button>
               </>
@@ -1232,7 +1266,7 @@ export function RequestDetail({ id }: { id: string }) {
       </Modal>
       <EditRequestModal open={edit} onClose={() => setEdit(false)} r={r} onSave={(d, pay, dir) => editRequest(r.id, d, pay, dir).then(() => { setEdit(false); toast("Solicitud actualizada"); })} />
       <Modal open={del} onClose={() => setDel(false)} title="¿Eliminar esta solicitud?">
-        <p className="text-ink-soft">Se borrará de la base de datos junto con sus postulaciones. Esta acción no se puede deshacer.</p>
+        <p className="text-ink-soft">Se borrará junto con sus postulaciones. Esta acción no se puede deshacer.</p>
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <Button variant="outline" onClick={() => setDel(false)}>Volver</Button>
           <Button variant="danger" disabled={busy} onClick={() => wrap(async () => { await deleteRequest(r.id); toast("Solicitud eliminada"); navigate("/solicitudes", true); })}>Eliminar</Button>

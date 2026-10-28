@@ -90,6 +90,8 @@ export interface Provider {
   publicLocation?: boolean;
   /** Cuenta de prueba (QA) */
   test?: boolean;
+  links?: ProviderLink[];
+  catalog?: CatalogItem[];
   resenas?: { name: string; stars: number; text: string; date: string }[];
 }
 
@@ -113,6 +115,16 @@ export interface Account {
   photoStored?: boolean;
   photoPath?: string | null;
   photoPrivacy?: "todos" | "contactos";
+}
+
+export type LinkType = "portafolio" | "web" | "instagram" | "facebook" | "tiktok" | "linkedin" | "whatsapp" | "otro";
+export interface ProviderLink { type: LinkType; url: string; label?: string }
+export const LINK_TYPES: Record<LinkType, string> = {
+  portafolio: "Portafolio", web: "Página web", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", linkedin: "LinkedIn", whatsapp: "WhatsApp Business", otro: "Otro enlace",
+};
+export interface CatalogItem {
+  id: string; service: ServiceId; title: string; description: string; priceMin: number | null; priceMax: number | null;
+  conditions: string; active: boolean; photos: string[];
 }
 
 export interface ClientInfo { id?: string; name: string; photo?: string; rating: number; reviews: number; test?: boolean }

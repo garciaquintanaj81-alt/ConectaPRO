@@ -171,7 +171,7 @@ export function Login() {
           ["Apple", <svg key="a" viewBox="0 0 24 24" className="h-8 w-8 fill-ink"><path d="M16.4 12.6c0-2.5 2-3.7 2.1-3.8-1.2-1.7-3-1.9-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.300-.8-1.7 0-3.3 1-4.2 2.5-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8s2 .8 3.3.8c1.4 0 2.3-1.3 3.1-2.5 1-1.4 1.4-2.8 1.4-2.9-.1 0-2.7-1-2.8-4.2zM14 5.2c.7-.8 1.2-2 1-3.2-1 0-2.2.7-3 1.5-.6.7-1.2 1.9-1 3.1 1.1.1 2.3-.6 3-1.4z"/></svg>],
           ["Facebook", <svg key="f" viewBox="0 0 24 24" className="h-8 w-8"><circle cx="12" cy="12" r="12" fill="#1877F2"/><path fill="#fff" d="M15.1 12.8h-2.2V20h-3v-7.2H8.4v-2.6h1.5V8.6c0-2 .9-3.2 3.3-3.2h2v2.6h-1.3c-.9 0-1 .4-1 1.1v1.1h2.4l-.2 2.6z"/></svg>],
         ].map(([name, icon]: any) => (
-          <button key={name} type="button" aria-label={name} onClick={() => toast(`El inicio con ${name} se habilita configurando ese proveedor en Supabase`)} className="flex h-16 items-center justify-center rounded-2xl bg-white ring-1 ring-line hover:ring-brand/40">{icon}</button>
+          <button key={name} type="button" aria-label={name} onClick={() => toast(`El inicio de sesión con ${name} estará disponible próximamente`)} className="flex h-16 items-center justify-center rounded-2xl bg-white ring-1 ring-line hover:ring-brand/40">{icon}</button>
         ))}
       </div>
 

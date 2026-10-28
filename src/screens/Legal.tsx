@@ -178,7 +178,7 @@ export function TestAccounts() {
           <Logo size="sm" />
         </div>
         <div className="mt-6 flex items-center gap-2"><LuFlaskConical className="h-7 w-7 text-[#b45309]" /><h1 className="text-3xl font-extrabold tracking-tight">Cuentas de prueba</h1></div>
-        <p className="mt-2 text-ink-soft">Escenario: una persona publica que necesita un <b className="text-ink">desayuno sorpresa</b> y tres proveedores se postulan con su propuesta y precio. Todo se guarda en la base de datos y <b className="text-ink">nadie responde automáticamente</b>: cada paso lo haces tú ingresando a cada cuenta (puedes usar varias pestañas o navegadores).</p>
+        <p className="mt-2 text-ink-soft">Escenario: una persona publica que necesita un <b className="text-ink">desayuno sorpresa</b> y tres proveedores se postulan con su propuesta y precio. Todo queda guardado y <b className="text-ink">nadie responde automáticamente</b>: cada paso lo haces tú ingresando a cada cuenta (puedes usar varias pestañas o navegadores).</p>
         <div className="mt-4 rounded-2xl bg-[#fff4dc] p-4 text-sm text-[#7a4a00]">Estas cuentas solo se ven entre ellas: los usuarios reales nunca las ven y siempre llevan la etiqueta <TestBadge className="align-middle" />. Contraseña de las cuatro: <b>Prueba2026*</b></div>
         {account && <p className="mt-4 text-sm text-ink-soft">Sesión actual: <b className="text-ink">{account.name}</b>. Al elegir otra cuenta se cerrará esta sesión.</p>}
         <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-white p-4 ring-1 ring-line sm:flex-row sm:items-center">
@@ -200,7 +200,7 @@ export function TestAccounts() {
               <span className="shrink-0 text-sm font-bold text-brand">{busy === a.email ? "Ingresando…" : i === 0 ? "Paso 1 · Publicar" : "Paso 2 · Postularse"}</span>
             </button>
           ))}
-          {list?.length === 0 && !err && <p className="card p-5 text-center text-ink-soft">Aún no se han creado las cuentas de prueba en la base de datos (ejecuta supabase/instalar.sql).</p>}
+          {list?.length === 0 && !err && <p className="card p-5 text-center text-ink-soft">Las cuentas de prueba todavía no están disponibles.</p>}
         </div>
         <ol className="card mt-6 list-decimal space-y-2 p-5 pl-10 text-sm text-ink-soft">
           <li><b className="text-ink">Cliente Prueba</b> publica la necesidad: <i>Desayunos y detalles sorpresa</i> ya viene elegido. Al publicar se borra la prueba anterior.</li>

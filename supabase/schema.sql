@@ -332,6 +332,99 @@ insert into config (clave, valor) values ('terminos_version', '2026-10-26')
 drop function if exists api_completar_registro(text, text, text, text, text, jsonb);
 
 -- ---------------------------------------------------------------------
+--  Migraciones (versión 4): fecha y hora de la necesidad, presupuesto,
+--  negociación con propuestas formales, catálogo y notificaciones push
+-- ---------------------------------------------------------------------
+-- La necesidad lleva fecha, hora y presupuesto (la hora se usa para filtrar
+-- proveedores según su horario de atención; no se bloquea la agenda)
+alter table solicitudes add column if not exists fecha date;
+alter table solicitudes add column if not exists hora time;
+alter table solicitudes add column if not exists presupuesto int;
+alter table solicitudes add column if not exists presupuesto_tipo text;
+do $$ begin
+  alter table solicitudes add constraint solicitudes_presupuesto_tipo_chk check (presupuesto_tipo is null or presupuesto_tipo in ('estimado', 'maximo'));
+exception when duplicate_object then null; end $$;
+
+-- Enlaces externos del proveedor (portafolio, redes, página web)
+alter table proveedores add column if not exists enlaces jsonb not null default '[]'::jsonb;
+
+-- El acuerdo guarda todas las condiciones pactadas en la propuesta aceptada
+alter table acuerdos add column if not exists direccion text;
+alter table acuerdos add column if not exists servicio_desc text;
+alter table acuerdos add column if not exists condiciones text;
+alter table acuerdos add column if not exists propuesta_id uuid;
+alter table acuerdos add column if not exists modificado timestamptz;
+
+-- Propuestas formales (contratación o modificación de un acuerdo). Son el historial de la negociación.
+create table if not exists propuestas (
+  id uuid primary key default gen_random_uuid(),
+  solicitud_id uuid not null references solicitudes(id) on delete cascade,
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  autor_id uuid not null references perfiles(id) on delete cascade,
+  tipo text not null default 'contratacion' check (tipo in ('contratacion', 'modificacion')),
+  servicio text not null,
+  precio int not null check (precio > 0),
+  fecha date not null,
+  hora time not null,
+  direccion text not null,
+  condiciones text not null default '',
+  estado text not null default 'pendiente' check (estado in ('pendiente', 'aceptada', 'rechazada', 'reemplazada', 'retirada')),
+  motivo text,
+  creado timestamptz not null default now(),
+  respondido timestamptz
+);
+create index if not exists propuestas_sol_idx on propuestas(solicitud_id, creado);
+alter table mensajes add column if not exists propuesta_id uuid references propuestas(id) on delete cascade;
+
+-- Al cancelar o terminar el servicio, las propuestas pendientes quedan retiradas
+create or replace function cp_solicitud_cierra() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.estado in ('cancelada', 'completada') and old.estado is distinct from new.estado then
+    update propuestas set estado = 'retirada', respondido = now() where solicitud_id = new.id and estado = 'pendiente';
+  end if;
+  return new;
+end $$;
+drop trigger if exists solicitudes_cierra on solicitudes;
+create trigger solicitudes_cierra after update of estado on solicitudes
+  for each row execute function cp_solicitud_cierra();
+
+-- Catálogo de servicios del proveedor
+create table if not exists catalogo (
+  id uuid primary key default gen_random_uuid(),
+  proveedor_id uuid not null references proveedores(id) on delete cascade,
+  servicio_id text not null references servicios(id),
+  titulo text not null,
+  descripcion text not null default '',
+  precio_min int,
+  precio_max int,
+  condiciones text not null default '',
+  fotos text[] not null default '{}',     -- rutas en Storage ("<usuario>/<archivo>") o imágenes de /img
+  activo boolean not null default true,
+  orden int not null default 0,
+  creado timestamptz not null default now(),
+  actualizado timestamptz not null default now()
+);
+create index if not exists catalogo_prov_idx on catalogo(proveedor_id, orden);
+
+-- Suscripciones de notificaciones push (una por navegador o celular)
+create table if not exists push_suscripciones (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references perfiles(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  agente text,
+  creado timestamptz not null default now()
+);
+
+-- Funciones cuya firma cambia en esta versión
+drop function if exists cp_match(text, double precision, double precision, uuid);
+drop function if exists api_vista_previa(text, text);
+drop function if exists api_publicar(text, text, text, text, double precision, double precision, text, text, boolean, int);
+drop function if exists api_confirmar_acuerdo(uuid, uuid, date, text, int);
+
+-- ---------------------------------------------------------------------
 --  6. Seguridad: nadie accede a las tablas directamente
 -- ---------------------------------------------------------------------
 do $$
@@ -468,6 +561,61 @@ begin
   end if;
 end $$;
 
+-- Inicio de un servicio (fecha + hora de Colombia) como instante absoluto
+create or replace function cp_inicio(p_fecha date, p_hora time) returns timestamptz
+language sql stable as $$ select (p_fecha + p_hora) at time zone 'America/Bogota' $$;
+
+-- ¿El proveedor atiende en esa fecha y hora? Se cruza con su horario semanal de atención
+-- (días y horas). Solo filtra a quién se notifica: no bloquea ni reserva la agenda.
+create or replace function cp_disponible(p_prov uuid, p_inicio timestamptz) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from proveedores p, (select p_inicio at time zone 'America/Bogota' as ini) t
+    where p.id = p_prov and p.activo
+      and extract(dow from t.ini)::int = any(p.dias)
+      and t.ini >= t.ini::date + make_interval(hours => p.hora_desde)
+      and t.ini < t.ini::date + make_interval(hours => p.hora_hasta))
+$$;
+
+-- ¿Pueden conversar a y b? Solo si hay una postulación o un acuerdo entre ellos
+-- (el cliente no puede escribirle a un proveedor que no se ha postulado), si ya tenían
+-- una conversación, o para proponer un trueque a quien publicó una oferta de trueque.
+create or replace function cp_puede_chatear(a uuid, b uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select a is not null and b is not null and a <> b and (
+    exists (select 1 from conversaciones where usuario_a = least(a, b) and usuario_b = greatest(a, b))
+    or exists (select 1 from solicitudes s join postulaciones po on po.solicitud_id = s.id join proveedores p on p.id = po.proveedor_id
+               where (s.cliente_id = a and p.perfil_id = b) or (s.cliente_id = b and p.perfil_id = a))
+    or exists (select 1 from solicitudes s join proveedores p on p.id = s.proveedor_id
+               where (s.cliente_id = a and p.perfil_id = b) or (s.cliente_id = b and p.perfil_id = a))
+    or exists (select 1 from trueque_ofertas t where t.activo and t.perfil_id = b))
+$$;
+
+create or replace function cp_precio(n int) returns text
+language sql immutable as $$ select '$' || replace(to_char(n, 'FM999,999,999'), ',', '.') $$;
+
+-- Propuesta formal en formato JSON
+create or replace function cp_propuesta_json(pid uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('id', x.id, 'requestId', x.solicitud_id, 'requestTitle', s.titulo, 'providerId', x.proveedor_id,
+    'authorId', x.autor_id, 'kind', x.tipo, 'service', x.servicio, 'price', x.precio,
+    'date', to_char(x.fecha, 'YYYY-MM-DD'), 'time', to_char(x.hora, 'HH24:MI'),
+    'address', x.direccion, 'conditions', x.condiciones, 'status', x.estado, 'reason', x.motivo,
+    'at', cp_ms(x.creado), 'respondedAt', cp_ms(x.respondido))
+  from propuestas x join solicitudes s on s.id = x.solicitud_id where x.id = pid
+$$;
+
+-- Catálogo del proveedor (el dueño ve también los servicios pausados)
+create or replace function cp_catalogo_json(prov uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'service', c.servicio_id, 'title', c.titulo, 'description', c.descripcion,
+           'priceMin', c.precio_min, 'priceMax', c.precio_max, 'conditions', c.condiciones, 'active', c.activo,
+           'photos', coalesce((select jsonb_agg(case when f like 'img/%' then f else 'sb:fotos-perfil/' || f end) from unnest(c.fotos) f), '[]'::jsonb))
+         order by c.orden, c.creado), '[]'::jsonb)
+  from catalogo c join proveedores p on p.id = c.proveedor_id
+  where c.proveedor_id = prov and (c.activo or p.perfil_id = cp_yo())
+$$;
+
 -- Proveedor en formato JSON (el mismo formato que usa la aplicación)
 -- Privacidad: el punto exacto del proveedor solo lo ve él mismo, o todos si lo autorizó
 -- (ubicacion_publica). A los demás se les entrega redondeado a ~1 km.
@@ -488,6 +636,7 @@ language sql stable security definer set search_path = public as $$
     'about', p.descripcion, 'offers', to_jsonb(p.ofrece),
     'portfolio', coalesce((select jsonb_agg(imagen order by orden, creado) from portafolio where proveedor_id = p.id), '[]'::jsonb),
     'phone', p.telefono, 'completed', p.completados,
+    'links', p.enlaces, 'catalog', cp_catalogo_json(p.id),
     'availability', cp_disponibilidad(p.dias, p.hora_desde, p.hora_hasta))
   from proveedores p
   join perfiles pe on pe.id = p.perfil_id
@@ -514,7 +663,12 @@ language sql stable security definer set search_path = public as $$
     'departamento', s.departamento, 'municipio', s.municipio,
     'municipioNombre', m.nombre, 'departamentoNombre', d.nombre, 'direccion', case when v.priv then s.direccion end,
     'payment', s.metodo_pago, 'wantsProposals', s.recibir_propuestas,
+    'date', to_char(s.fecha, 'YYYY-MM-DD'), 'time', to_char(s.hora, 'HH24:MI'),
+    'budget', s.presupuesto, 'budgetType', s.presupuesto_tipo,
     'createdAt', cp_ms(s.creado), 'status', s.estado,
+    'proposals', coalesce((select jsonb_agg(cp_propuesta_json(x.id) order by x.creado)
+                           from propuestas x join proveedores pv on pv.id = x.proveedor_id
+                           where x.solicitud_id = s.id and (v.duena or pv.perfil_id = v.yo)), '[]'::jsonb),
     'matched', case when v.duena then coalesce((select jsonb_agg(proveedor_id) from solicitud_notificados where solicitud_id = s.id), '[]'::jsonb) else '[]'::jsonb end,
     'matchedCount', (select count(*) from solicitud_notificados where solicitud_id = s.id),
     'applicantsCount', (select count(*) from postulaciones where solicitud_id = s.id),
@@ -525,7 +679,9 @@ language sql stable security definer set search_path = public as $$
     'declinedBy', coalesce((select jsonb_agg(proveedor_id) from descartes where solicitud_id = s.id), '[]'::jsonb),
     'providerId', s.proveedor_id,
     'agreement', (select jsonb_build_object('date', to_char(a.fecha, 'YYYY-MM-DD'), 'time', to_char(a.hora, 'HH24:MI'),
-                    'price', a.precio, 'code', a.codigo, 'signedAt', cp_ms(a.firmado), 'extendedDays', nullif(a.plazo_extra_dias, 0))
+                    'price', a.precio, 'code', a.codigo, 'signedAt', cp_ms(a.firmado), 'extendedDays', nullif(a.plazo_extra_dias, 0),
+                    'address', case when v.priv then a.direccion end, 'service', a.servicio_desc,
+                    'conditions', a.condiciones, 'modifiedAt', cp_ms(a.modificado))
                   from acuerdos a where a.solicitud_id = s.id),
     'rating', (select jsonb_build_object('stars', estrellas, 'comment', comentario, 'at', cp_ms(creado))
                from calificaciones where solicitud_id = s.id and rol_autor = 'cliente'),
@@ -554,7 +710,8 @@ $$;
 --  1) categoría  2) distancia (Haversine) dentro de la cobertura
 --  3) disponibilidad horaria  4) ordena por reputación y cercanía
 -- =====================================================================
-create or replace function cp_match(p_servicio text, p_lat double precision, p_lng double precision, p_excluir uuid default null)
+create or replace function cp_match(p_servicio text, p_lat double precision, p_lng double precision, p_excluir uuid default null,
+                                    p_inicio timestamptz default null)
 returns table (proveedor_id uuid, perfil_id uuid, distancia double precision, disponibilidad text, puntaje double precision)
 language sql stable security definer set search_path = public as $$
   select p.id, p.perfil_id, d.km, a.disp,
@@ -570,6 +727,8 @@ language sql stable security definer set search_path = public as $$
     and (p_excluir is null or p.perfil_id <> p_excluir)
     -- solo proveedores del mismo "mundo" que quien publica (real, prueba o simulación)
     and (case when pe.demo then 'demo' when pe.prueba then 'prueba' else 'real' end) = cp_mundo(p_excluir)
+    -- que atienda en la fecha y hora solicitadas (según su horario de atención)
+    and (p_inicio is null or cp_disponible(p.id, p_inicio))
   order by 5 desc
 $$;
 
@@ -709,9 +868,12 @@ language sql stable security definer set search_path = public as $$
   where exists (select 1 from proveedores p where p.id = p_id and cp_mundo(p.perfil_id) = cp_mundo(cp_yo()))
 $$;
 
-create or replace function api_vista_previa(p_servicio text, p_municipio text) returns int
+create or replace function api_vista_previa(p_servicio text, p_municipio text, p_fecha date default null, p_hora text default null) returns int
 language sql stable security definer set search_path = public as $$
-  select count(*)::int from municipios m, cp_match(p_servicio, m.lat, m.lng, cp_yo()) where m.codigo = p_municipio
+  select count(*)::int from municipios m,
+    cp_match(p_servicio, m.lat, m.lng, cp_yo(),
+             case when p_fecha is not null and nullif(p_hora, '') is not null then cp_inicio(p_fecha, p_hora::time) end)
+  where m.codigo = p_municipio
 $$;
 
 -- =====================================================================
@@ -872,6 +1034,10 @@ begin
     where s.estado = 'buscando' and s.cliente_id <> yo
       and cp_mundo(s.cliente_id) = mundo
       and s.servicio_id in (select servicio_id from proveedor_servicios where proveedor_id = prov)
+      -- solo si atiende en la fecha y hora pedidas (o si ya se postuló)
+      and (s.fecha is null
+           or exists (select 1 from postulaciones x where x.solicitud_id = s.id and x.proveedor_id = prov)
+           or (cp_inicio(s.fecha, s.hora) > now() and cp_disponible(prov, cp_inicio(s.fecha, s.hora))))
       and cp_dist(pv.lat, pv.lng, s.lat, s.lng) <= pv.cobertura_km
       and not exists (select 1 from descartes d where d.solicitud_id = s.id and d.proveedor_id = prov);
 
@@ -901,7 +1067,8 @@ begin
                  and m.creado > coalesce((select leido_hasta from lecturas l where l.conversacion_id = c.id and l.perfil_id = yo), 'epoch'::timestamptz)),
       'messages', coalesce((select jsonb_agg(jsonb_build_object('id', m.id,
                     'from', case when m.autor_id is null then 'system' when m.autor_id = yo then 'me' else 'peer' end,
-                    'text', m.texto, 'image', m.imagen, 'at', cp_ms(m.creado)) order by m.creado)
+                    'text', m.texto, 'image', m.imagen, 'at', cp_ms(m.creado),
+                    'proposal', case when m.propuesta_id is not null then cp_propuesta_json(m.propuesta_id) end) order by m.creado)
                   from (select * from mensajes where conversacion_id = c.id order by creado desc limit 100) m), '[]'::jsonb)) as conv,
       (select max(creado) from mensajes where conversacion_id = c.id) as ult
     from conversaciones c
@@ -985,6 +1152,16 @@ begin
       ofrece = array(select jsonb_array_elements_text(coalesce(p_datos->'offers', '[]'::jsonb)))
     where id = pid;
   end if;
+  -- Enlaces externos: portafolio, redes profesionales o página comercial
+  if p_datos ? 'links' then
+    if jsonb_array_length(coalesce(p_datos->'links', '[]'::jsonb)) > 6 then raise exception 'Máximo 6 enlaces'; end if;
+    if exists (select 1 from jsonb_array_elements(coalesce(p_datos->'links', '[]'::jsonb)) l
+               where coalesce(l->>'url', '') !~ '^https?://[^\s]+\.[^\s]+$' or length(l->>'url') > 300
+                  or coalesce(l->>'type', '') not in ('portafolio', 'web', 'instagram', 'facebook', 'tiktok', 'linkedin', 'whatsapp', 'otro')) then
+      raise exception 'Revisa los enlaces: deben empezar por https:// y tener un tipo válido'; end if;
+    update proveedores set enlaces = (select coalesce(jsonb_agg(jsonb_build_object('type', l->>'type', 'url', l->>'url', 'label', left(coalesce(l->>'label', ''), 60))), '[]'::jsonb)
+                                      from jsonb_array_elements(p_datos->'links') l) where id = pid;
+  end if;
   -- Autorización expresa para mostrar el punto exacto de atención (por defecto: aproximado)
   if p_datos ? 'publicLocation' then
     update proveedores set ubicacion_publica = coalesce((p_datos->>'publicLocation')::boolean, false) where id = pid;
@@ -1015,13 +1192,14 @@ end $$;
 -- =====================================================================
 create or replace function api_publicar(
   p_descripcion text, p_servicio text, p_departamento text, p_municipio text,
+  p_fecha date default null, p_hora text default null,
   p_lat double precision default null, p_lng double precision default null,
   p_direccion text default '', p_pago text default 'efectivo', p_propuestas boolean default true,
-  p_precision int default null)
+  p_precision int default null, p_presupuesto int default null, p_presupuesto_tipo text default null)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   yo uuid := cp_req(); v_id uuid; v_lat double precision; v_lng double precision; v_titulo text; v_serv text;
-  tr jsonb; n int := 0; r record; v_gps boolean := false; v_mundo text := cp_mundo(cp_req());
+  tr jsonb; n int := 0; r record; v_gps boolean := false; v_mundo text := cp_mundo(cp_req()); v_ini timestamptz;
 begin
   perform cp_requiere_terminos(yo);
   perform cp_no_suspendido(yo);
@@ -1033,6 +1211,13 @@ begin
   if length(p_descripcion) > 500 then raise exception 'La descripción no puede superar 500 caracteres'; end if;
   select nombre into v_serv from servicios where id = p_servicio;
   if v_serv is null then raise exception 'Selecciona una categoría de servicio válida'; end if;
+  -- Fecha y hora: se cruzan con el horario de atención de cada proveedor
+  if p_fecha is null or nullif(p_hora, '') is null then raise exception 'Indica la fecha y la hora en que necesitas el servicio'; end if;
+  v_ini := cp_inicio(p_fecha, p_hora::time);
+  if v_ini < now() + interval '15 minutes' then raise exception 'La fecha y hora deben ser al menos 15 minutos después de ahora'; end if;
+  if p_fecha > (now() at time zone 'America/Bogota')::date + 180 then raise exception 'La fecha no puede ser a más de 6 meses'; end if;
+  if p_presupuesto is not null and (p_presupuesto < 5000 or p_presupuesto > 50000000) then raise exception 'El presupuesto debe estar entre $5.000 y $50.000.000'; end if;
+  if p_presupuesto is not null and coalesce(p_presupuesto_tipo, 'estimado') not in ('estimado', 'maximo') then raise exception 'Tipo de presupuesto no válido'; end if;
   select lat, lng into v_lat, v_lng from municipios where codigo = p_municipio and departamento = p_departamento;
   if not found then raise exception 'Selecciona un departamento y un municipio válidos'; end if;
   if length(trim(coalesce(p_direccion, ''))) < 5 then raise exception 'Escribe la dirección donde se prestará el servicio'; end if;
@@ -1051,25 +1236,28 @@ begin
     'byCategory', (select count(*) from proveedor_servicios ps join proveedores p on p.id = ps.proveedor_id
                    where p.activo and ps.servicio_id = p_servicio and p.perfil_id <> yo and cp_mundo(p.perfil_id) = v_mundo),
     'byCoverage', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo)),
-    'bySchedule', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo) where disponibilidad <> 'otro'));
+    'bySchedule', (select count(*) from cp_match(p_servicio, v_lat, v_lng, yo, v_ini)));
 
   insert into solicitudes (cliente_id, titulo, descripcion, servicio_id, departamento, municipio, lat, lng, direccion,
-                           metodo_pago, recibir_propuestas, foto, traza, ubicacion_gps, precision_m)
+                           metodo_pago, recibir_propuestas, foto, traza, ubicacion_gps, precision_m,
+                           fecha, hora, presupuesto, presupuesto_tipo)
   values (yo, v_titulo, trim(p_descripcion), p_servicio, p_departamento, p_municipio, v_lat, v_lng, trim(p_direccion),
-          p_pago, p_propuestas, (select foto from servicios where id = p_servicio), tr, v_gps, case when v_gps then p_precision end)
+          p_pago, p_propuestas, (select foto from servicios where id = p_servicio), tr, v_gps, case when v_gps then p_precision end,
+          p_fecha, p_hora::time, p_presupuesto, case when p_presupuesto is not null then coalesce(p_presupuesto_tipo, 'estimado') end)
   returning id into v_id;
 
-  -- Se notifica a los proveedores compatibles. Nadie responde automáticamente:
-  -- cada postulación la envía el proveedor desde su propia cuenta (api_postular).
-  for r in select m.proveedor_id, m.perfil_id, m.distancia from cp_match(p_servicio, v_lat, v_lng, yo) m
+  -- Solo se notifica a proveedores compatibles (categoría + cobertura) que atienden en esa fecha y hora.
+  -- Nadie responde automáticamente: cada postulación la envía el proveedor desde su cuenta.
+  for r in select m.proveedor_id, m.perfil_id, m.distancia from cp_match(p_servicio, v_lat, v_lng, yo, v_ini) m
   loop
     insert into solicitud_notificados values (v_id, r.proveedor_id, round(r.distancia::numeric, 2));
     perform cp_notificar(r.perfil_id, 'match',
-      format('Nueva oportunidad de %s a %s km: "%s"', lower(v_serv), round(r.distancia::numeric, 1), v_titulo), '/oportunidad/' || v_id);
+      format('Nueva oportunidad de %s para el %s a las %s (a %s km): "%s"', lower(v_serv), to_char(p_fecha, 'DD/MM'),
+             to_char(p_hora::time, 'HH12:MI am'), round(r.distancia::numeric, 1), v_titulo), '/oportunidad/' || v_id);
     n := n + 1;
   end loop;
 
-  perform cp_notificar(yo, 'match', format('Notificamos a %s proveedores compatibles para "%s"', n, v_titulo), '/buscando/' || v_id);
+  perform cp_notificar(yo, 'match', format('Notificamos a %s proveedores disponibles para "%s"', n, v_titulo), '/buscando/' || v_id);
   return jsonb_build_object('id', v_id, 'notificados', n, 'trace', tr, 'gps', v_gps);
 end $$;
 
@@ -1100,7 +1288,7 @@ end $$;
 -- =====================================================================
 create or replace function api_postular(p_solicitud uuid, p_precio int, p_nota text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); s solicitudes; v_nombre text;
+declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); s solicitudes; v_nombre text; v_conv uuid; v_nueva boolean;
 begin
   if prov is null then raise exception 'Primero configura tu perfil de proveedor'; end if;
   perform cp_requiere_terminos(yo);
@@ -1111,13 +1299,23 @@ begin
   if s.estado <> 'buscando' then raise exception 'Esta solicitud ya fue asignada'; end if;
   if not exists (select 1 from proveedor_servicios where proveedor_id = prov and servicio_id = s.servicio_id) then
     raise exception 'Esta solicitud no corresponde a tus categorías'; end if;
+  if s.fecha is not null then
+    if cp_inicio(s.fecha, s.hora) < now() then raise exception 'La fecha de esta solicitud ya pasó'; end if;
+    if not cp_disponible(prov, cp_inicio(s.fecha, s.hora)) then
+      raise exception 'La fecha y hora de esta solicitud están fuera de tu horario de atención'; end if;
+  end if;
   if coalesce(p_precio, 0) < 5000 then raise exception 'El precio mínimo es $5.000'; end if;
+  v_nueva := not exists (select 1 from postulaciones where solicitud_id = p_solicitud and proveedor_id = prov);
   insert into postulaciones (solicitud_id, proveedor_id, precio, nota) values (p_solicitud, prov, p_precio, nullif(trim(coalesce(p_nota, '')), ''))
   on conflict (solicitud_id, proveedor_id) do update set precio = excluded.precio, nota = excluded.nota;
   select nombre into v_nombre from perfiles where id = yo;
-  perform cp_notificar(s.cliente_id, 'match', format('%s se postuló a "%s" por $%s', v_nombre, s.titulo,
-    replace(to_char(p_precio, 'FM999,999,999'), ',', '.')), '/proveedores/' || s.id);
-  return cp_solicitud_json(p_solicitud);
+  -- Al postularse se abre la conversación para negociar
+  v_conv := cp_conversacion(yo, s.cliente_id);
+  insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null,
+    format('%s %s a "%s" con una oferta inicial de %s. Pueden conversar para acordar los detalles.', v_nombre,
+           case when v_nueva then 'se postuló' else 'actualizó su postulación' end, s.titulo, cp_precio(p_precio)));
+  perform cp_notificar(s.cliente_id, 'match', format('%s se postuló a "%s" por %s', v_nombre, s.titulo, cp_precio(p_precio)), '/proveedores/' || s.id);
+  return cp_solicitud_json(p_solicitud) || jsonb_build_object('conversationId', v_conv);
 end $$;
 
 create or replace function api_descartar(p_solicitud uuid) returns void
@@ -1144,36 +1342,193 @@ begin
   return v;
 end $$;
 
-create or replace function api_confirmar_acuerdo(p_solicitud uuid, p_proveedor uuid, p_fecha date, p_hora text, p_precio int) returns jsonb
+-- =====================================================================
+--  NEGOCIACIÓN: PROPUESTAS FORMALES
+--  · Contratación: el proveedor que se postuló envía servicio, precio final, fecha, hora,
+--    lugar y condiciones. El acuerdo solo existe cuando el cliente la acepta.
+--  · Modificación: con el acuerdo en curso, cualquiera de las dos partes propone un cambio
+--    y la otra debe aceptarlo. Todas las propuestas quedan guardadas como historial.
+-- =====================================================================
+create or replace function api_enviar_propuesta(p_solicitud uuid, p_servicio text, p_precio int, p_fecha date, p_hora text,
+                                                p_direccion text, p_condiciones text default '') returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare yo uuid := cp_req(); s solicitudes; v_codigo text; v_prov_perfil uuid; v_prov_nombre text; v_conv uuid; po record;
+declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); s solicitudes; v_tipo text; v_prov uuid; v_otro uuid; v_prov_perfil uuid;
+  v_ini timestamptz; v_id uuid; v_conv uuid; v_nombre text;
 begin
   perform cp_requiere_terminos(yo);
-  select * into s from solicitudes where id = p_solicitud for update;
-  if s.id is null or s.cliente_id <> yo then raise exception 'Solicitud no encontrada'; end if;
-  if s.estado <> 'buscando' then raise exception 'Esta solicitud ya tiene un acuerdo'; end if;
-  if not exists (select 1 from postulaciones where solicitud_id = p_solicitud and proveedor_id = p_proveedor and visible_desde <= now()) then
-    raise exception 'Este proveedor no se ha postulado a tu solicitud'; end if;
-  if p_fecha < (now() at time zone 'America/Bogota')::date then raise exception 'La fecha no puede ser anterior a hoy'; end if;
+  select * into s from solicitudes where id = p_solicitud;
+  if s.id is null then raise exception 'Solicitud no encontrada'; end if;
+  if s.estado = 'buscando' then
+    if prov is null or not exists (select 1 from postulaciones where solicitud_id = s.id and proveedor_id = prov) then
+      raise exception 'Solo un proveedor que se postuló puede enviar una propuesta formal'; end if;
+    v_tipo := 'contratacion'; v_prov := prov; v_otro := s.cliente_id;
+  elsif s.estado = 'en_curso' then
+    select perfil_id into v_prov_perfil from proveedores where id = s.proveedor_id;
+    if yo = s.cliente_id then v_otro := v_prov_perfil;
+    elsif yo = v_prov_perfil then v_otro := s.cliente_id;
+    else raise exception 'No participas en este acuerdo'; end if;
+    v_tipo := 'modificacion'; v_prov := s.proveedor_id;
+  else
+    raise exception 'Esta solicitud ya terminó';
+  end if;
+  if length(trim(coalesce(p_servicio, ''))) < 5 then raise exception 'Describe el servicio que se va a prestar'; end if;
+  if coalesce(p_precio, 0) < 5000 then raise exception 'El precio mínimo es $5.000'; end if;
+  if length(trim(coalesce(p_direccion, ''))) < 5 then raise exception 'Escribe el lugar donde se prestará el servicio'; end if;
+  if p_fecha is null or nullif(p_hora, '') is null then raise exception 'Indica la fecha y la hora'; end if;
+  v_ini := cp_inicio(p_fecha, p_hora::time);
+  if v_ini < now() then raise exception 'La fecha y hora de la propuesta deben ser futuras'; end if;
 
-  v_codigo := 'CP-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('acuerdo_seq')::text, 4, '0');
-  -- El precio del acuerdo es el que propuso el proveedor en su postulación
-  select precio into p_precio from postulaciones where solicitud_id = p_solicitud and proveedor_id = p_proveedor;
-  insert into acuerdos (solicitud_id, codigo, fecha, hora, precio) values (p_solicitud, v_codigo, p_fecha, p_hora::time, p_precio);
-  update solicitudes set estado = 'en_curso', proveedor_id = p_proveedor where id = p_solicitud;
-
-  select p.perfil_id, pe.nombre into v_prov_perfil, v_prov_nombre from proveedores p join perfiles pe on pe.id = p.perfil_id where p.id = p_proveedor;
-  perform cp_notificar(yo, 'agreement', format('Acuerdo digital %s confirmado con %s', v_codigo, v_prov_nombre), '/solicitud/' || p_solicitud);
-  perform cp_notificar(v_prov_perfil, 'agreement', format('¡Te eligieron! Nuevo acuerdo %s: "%s"', v_codigo, s.titulo), '/trabajo/' || p_solicitud);
-  -- Los demás proveedores que se postularon reciben aviso de que la solicitud fue asignada
-  for po in select pe.id as perfil from postulaciones x join proveedores p on p.id = x.proveedor_id join perfiles pe on pe.id = p.perfil_id
-            where x.solicitud_id = p_solicitud and x.proveedor_id <> p_proveedor loop
-    perform cp_notificar(po.perfil, 'info', format('El cliente eligió otra propuesta para "%s". ¡Gracias por postularte!', s.titulo), '/oportunidad/' || p_solicitud);
-  end loop;
-  v_conv := cp_conversacion(yo, v_prov_perfil);
-  insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null, format('Acuerdo %s confirmado · %s', v_codigo, s.titulo));
-  return cp_solicitud_json(p_solicitud) || jsonb_build_object('conversationId', v_conv);
+  update propuestas set estado = 'reemplazada', respondido = now() where solicitud_id = s.id and proveedor_id = v_prov and estado = 'pendiente';
+  insert into propuestas (solicitud_id, proveedor_id, autor_id, tipo, servicio, precio, fecha, hora, direccion, condiciones)
+  values (s.id, v_prov, yo, v_tipo, trim(p_servicio), p_precio, p_fecha, p_hora::time, trim(p_direccion), left(trim(coalesce(p_condiciones, '')), 1000))
+  returning id into v_id;
+  v_conv := cp_conversacion(yo, v_otro);
+  insert into mensajes (conversacion_id, autor_id, texto, propuesta_id)
+  values (v_conv, yo, case v_tipo when 'contratacion' then 'Te envié una propuesta formal' else 'Propongo un cambio al acuerdo' end, v_id);
+  select nombre into v_nombre from perfiles where id = yo;
+  perform cp_notificar(v_otro, 'proposal',
+    format('%s te envió %s para "%s": %s el %s a las %s', split_part(v_nombre, ' ', 1),
+           case v_tipo when 'contratacion' then 'una propuesta formal' else 'un cambio al acuerdo' end,
+           s.titulo, cp_precio(p_precio), to_char(p_fecha, 'DD/MM'), to_char(p_hora::time, 'HH12:MI am')), '/chat/' || v_conv);
+  return cp_propuesta_json(v_id) || jsonb_build_object('conversationId', v_conv);
 end $$;
+
+create or replace function api_responder_propuesta(p_id uuid, p_aceptar boolean, p_motivo text default null) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); x propuestas; s solicitudes; v_prov_perfil uuid; v_conv uuid; v_codigo text; po record;
+begin
+  perform cp_requiere_terminos(yo);
+  select * into x from propuestas where id = p_id for update;
+  if x.id is null then raise exception 'Propuesta no encontrada'; end if;
+  if x.estado <> 'pendiente' then raise exception 'Esta propuesta ya fue respondida o reemplazada por una más reciente'; end if;
+  select * into s from solicitudes where id = x.solicitud_id for update;
+  select perfil_id into v_prov_perfil from proveedores where id = x.proveedor_id;
+  if x.tipo = 'contratacion' then
+    if yo <> s.cliente_id then raise exception 'Solo el cliente puede aceptar o rechazar esta propuesta'; end if;
+  elsif yo = x.autor_id or yo not in (s.cliente_id, v_prov_perfil) then
+    raise exception 'Este cambio lo debe aceptar o rechazar la otra parte';
+  end if;
+  v_conv := cp_conversacion(s.cliente_id, v_prov_perfil);
+
+  if not coalesce(p_aceptar, false) then
+    update propuestas set estado = 'rechazada', motivo = nullif(trim(coalesce(p_motivo, '')), ''), respondido = now() where id = p_id;
+    insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null,
+      'Propuesta rechazada' || coalesce(': ' || nullif(trim(coalesce(p_motivo, '')), ''), ''));
+    perform cp_notificar(x.autor_id, 'proposal', format('Rechazaron tu propuesta para "%s"', s.titulo), '/chat/' || v_conv);
+    return cp_solicitud_json(s.id) || jsonb_build_object('conversationId', v_conv);
+  end if;
+
+  if cp_inicio(x.fecha, x.hora) < now() then raise exception 'La fecha de esta propuesta ya pasó. Pide una nueva propuesta'; end if;
+
+  if x.tipo = 'contratacion' then
+    if s.estado <> 'buscando' then raise exception 'Esta solicitud ya tiene un acuerdo'; end if;
+    v_codigo := 'CP-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('acuerdo_seq')::text, 4, '0');
+    insert into acuerdos (solicitud_id, codigo, fecha, hora, precio, direccion, servicio_desc, condiciones, propuesta_id)
+    values (s.id, v_codigo, x.fecha, x.hora, x.precio, x.direccion, x.servicio, x.condiciones, x.id);
+    update solicitudes set estado = 'en_curso', proveedor_id = x.proveedor_id, direccion = x.direccion where id = s.id;
+    update propuestas set estado = 'aceptada', respondido = now() where id = p_id;
+    update propuestas set estado = 'retirada', respondido = now() where solicitud_id = s.id and estado = 'pendiente';
+    insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null,
+      format('Propuesta aceptada · Acuerdo %s: %s el %s a las %s', v_codigo, cp_precio(x.precio), to_char(x.fecha, 'DD/MM/YYYY'), to_char(x.hora, 'HH12:MI am')));
+    perform cp_notificar(v_prov_perfil, 'agreement', format('¡Aceptaron tu propuesta! Acuerdo %s: "%s"', v_codigo, s.titulo), '/trabajo/' || s.id);
+    perform cp_notificar(s.cliente_id, 'agreement', format('Contrataste el servicio. Acuerdo %s confirmado', v_codigo), '/solicitud/' || s.id);
+    for po in select pe.id as perfil from postulaciones z join proveedores p on p.id = z.proveedor_id join perfiles pe on pe.id = p.perfil_id
+              where z.solicitud_id = s.id and z.proveedor_id <> x.proveedor_id loop
+      perform cp_notificar(po.perfil, 'info', format('El cliente eligió otra propuesta para "%s". ¡Gracias por postularte!', s.titulo), '/oportunidades');
+    end loop;
+  else
+    if s.estado <> 'en_curso' then raise exception 'Este acuerdo ya no está en curso'; end if;
+    update acuerdos set fecha = x.fecha, hora = x.hora, precio = x.precio, direccion = x.direccion,
+           servicio_desc = x.servicio, condiciones = x.condiciones, propuesta_id = x.id, modificado = now()
+    where solicitud_id = s.id;
+    update solicitudes set direccion = x.direccion where id = s.id;
+    update propuestas set estado = 'aceptada', respondido = now() where id = p_id;
+    insert into mensajes (conversacion_id, autor_id, texto) values (v_conv, null,
+      format('Cambio aceptado: el acuerdo queda en %s el %s a las %s', cp_precio(x.precio), to_char(x.fecha, 'DD/MM/YYYY'), to_char(x.hora, 'HH12:MI am')));
+    perform cp_notificar(x.autor_id, 'agreement', format('Aceptaron el cambio al acuerdo de "%s"', s.titulo),
+      case when x.autor_id = s.cliente_id then '/solicitud/' else '/trabajo/' end || s.id);
+  end if;
+  return cp_solicitud_json(s.id) || jsonb_build_object('conversationId', v_conv);
+end $$;
+
+create or replace function api_retirar_propuesta(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update propuestas set estado = 'retirada', respondido = now() where id = p_id and autor_id = cp_req() and estado = 'pendiente';
+  if not found then raise exception 'No puedes retirar esta propuesta'; end if;
+end $$;
+
+-- =====================================================================
+--  CATÁLOGO DE SERVICIOS DEL PROVEEDOR (crear, editar, eliminar)
+-- =====================================================================
+create or replace function api_catalogo_guardar(p_datos jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req(); prov uuid := cp_mi_proveedor(yo); v_id uuid := nullif(p_datos->>'id', '')::uuid;
+  v_old text[]; v_fotos text[] := '{}'; f text; v_min int; v_max int;
+begin
+  if prov is null then raise exception 'Primero configura tu perfil de proveedor'; end if;
+  perform cp_requiere_terminos(yo);
+  if length(trim(coalesce(p_datos->>'title', ''))) < 3 then raise exception 'Escribe el nombre del servicio'; end if;
+  if not exists (select 1 from servicios where id = p_datos->>'service') then raise exception 'Elige la subcategoría del servicio'; end if;
+  v_min := nullif(p_datos->>'priceMin', '')::int; v_max := nullif(p_datos->>'priceMax', '')::int;
+  if v_min is not null and v_min < 0 or v_max is not null and v_max < 0 then raise exception 'Los precios no pueden ser negativos'; end if;
+  if v_min is not null and v_max is not null and v_max < v_min then raise exception 'El precio máximo debe ser mayor o igual al mínimo'; end if;
+  if v_id is not null then
+    select fotos into v_old from catalogo where id = v_id and proveedor_id = prov;
+    if not found then raise exception 'Servicio no encontrado'; end if;
+  end if;
+  for f in select jsonb_array_elements_text(coalesce(p_datos->'photos', '[]'::jsonb)) loop
+    f := regexp_replace(f, '^sb:fotos-perfil/', '');
+    if f = any(coalesce(v_old, '{}')) or f ~ ('^' || auth.uid()::text || '/[A-Za-z0-9_-]{8,64}\.(jpg|jpeg|png|webp)$') then
+      v_fotos := v_fotos || f;
+    else raise exception 'Una de las fotos no es válida'; end if;
+  end loop;
+  if cardinality(v_fotos) > 6 then raise exception 'Máximo 6 fotos por servicio'; end if;
+  if v_id is null then
+    insert into catalogo (proveedor_id, servicio_id, titulo, descripcion, precio_min, precio_max, condiciones, fotos, activo, orden)
+    values (prov, p_datos->>'service', trim(p_datos->>'title'), left(trim(coalesce(p_datos->>'description', '')), 600), v_min, v_max,
+            left(trim(coalesce(p_datos->>'conditions', '')), 600), v_fotos, coalesce((p_datos->>'active')::boolean, true),
+            coalesce((select max(orden) + 1 from catalogo where proveedor_id = prov), 0))
+    returning id into v_id;
+  else
+    update catalogo set servicio_id = p_datos->>'service', titulo = trim(p_datos->>'title'), descripcion = left(trim(coalesce(p_datos->>'description', '')), 600),
+           precio_min = v_min, precio_max = v_max, condiciones = left(trim(coalesce(p_datos->>'conditions', '')), 600),
+           fotos = v_fotos, activo = coalesce((p_datos->>'active')::boolean, activo), actualizado = now()
+    where id = v_id;
+  end if;
+  -- La subcategoría del servicio queda entre las que atiende (para recibir oportunidades)
+  insert into proveedor_servicios values (prov, p_datos->>'service') on conflict do nothing;
+  return jsonb_build_object('id', v_id,
+    'removidas', to_jsonb(array(select x from unnest(coalesce(v_old, '{}')) x where not (x = any(v_fotos)) and x not like 'img/%')));
+end $$;
+
+create or replace function api_catalogo_eliminar(p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_fotos text[];
+begin
+  delete from catalogo where id = p_id and proveedor_id = cp_mi_proveedor(cp_req()) returning fotos into v_fotos;
+  if not found then raise exception 'Servicio no encontrado'; end if;
+  return jsonb_build_object('removidas', to_jsonb(array(select x from unnest(v_fotos) x where x not like 'img/%')));
+end $$;
+
+-- =====================================================================
+--  NOTIFICACIONES PUSH: suscripciones de cada navegador o celular
+--  (el envío lo hace la función de Supabase supabase/functions/enviar-push)
+-- =====================================================================
+create or replace function api_push_suscribir(p_endpoint text, p_p256dh text, p_auth text, p_agente text default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare yo uuid := cp_req();
+begin
+  if coalesce(p_endpoint, '') !~ '^https://' or length(coalesce(p_p256dh, '')) < 20 or length(coalesce(p_auth, '')) < 8 then
+    raise exception 'Suscripción no válida'; end if;
+  insert into push_suscripciones (perfil_id, endpoint, p256dh, auth, agente) values (yo, p_endpoint, p_p256dh, p_auth, left(p_agente, 300))
+  on conflict (endpoint) do update set perfil_id = excluded.perfil_id, p256dh = excluded.p256dh, auth = excluded.auth, agente = excluded.agente;
+end $$;
+
+create or replace function api_push_cancelar(p_endpoint text) returns void
+language sql security definer set search_path = public as $$
+  delete from push_suscripciones where endpoint = p_endpoint and perfil_id = cp_req()
+$$;
 
 -- =====================================================================
 --  CALIFICACIÓN MUTUA
@@ -1278,6 +1633,9 @@ begin
   perform cp_requiere_terminos(yo);
   if otro is null and p_proveedor is not null then select perfil_id into otro from proveedores where id = p_proveedor; end if;
   if otro is null or not exists (select 1 from perfiles where id = otro) or cp_mundo(otro) <> cp_mundo(yo) then raise exception 'Usuario no encontrado'; end if;
+  if not cp_puede_chatear(yo, otro) then
+    raise exception 'Podrán conversar cuando el proveedor se postule a una solicitud del cliente';
+  end if;
   return cp_conversacion(yo, otro);
 end $$;
 
@@ -1415,15 +1773,18 @@ revoke execute on all functions in schema public from public, anon, authenticate
 grant execute on function
   api_catalogo(), api_departamentos(), api_municipios(text), api_municipio_cercano(double precision, double precision),
   api_aliados(), api_demo_cuentas(), api_cuentas_prueba(), api_buscar_proveedores(text, text, text, text, text, boolean, text, double precision, double precision), api_proveedor(uuid),
-  api_vista_previa(text, text), api_trueque_buscar(text, text, text)
+  api_vista_previa(text, text, date, text), api_trueque_buscar(text, text, text)
 to anon, authenticated;
 grant execute on function
   api_completar_registro(text, text, text, text, text, jsonb, text, text), api_aceptar_terminos(text, text),
   api_foto_perfil(text), api_foto_privacidad(text), api_set_modo(text), api_actualizar_perfil(jsonb),
   api_preferencias(boolean, boolean, boolean), api_eliminar_cuenta(), api_estado(), api_guardar_proveedor(jsonb),
-  api_publicar(text, text, text, text, double precision, double precision, text, text, boolean, int),
+  api_publicar(text, text, text, text, date, text, double precision, double precision, text, text, boolean, int, int, text),
+  api_enviar_propuesta(uuid, text, int, date, text, text, text), api_responder_propuesta(uuid, boolean, text), api_retirar_propuesta(uuid),
+  api_catalogo_guardar(jsonb), api_catalogo_eliminar(uuid),
+  api_push_suscribir(text, text, text, text), api_push_cancelar(text),
   api_editar_solicitud(uuid, text, text, text), api_eliminar_solicitud(uuid), api_postular(uuid, int, text), api_descartar(uuid),
-  api_confirmar_acuerdo(uuid, uuid, date, text, int), api_calificar(uuid, int, text), api_extender_plazo(uuid),
+  api_calificar(uuid, int, text), api_extender_plazo(uuid),
   api_cancelar(uuid, boolean), api_no_asistir(uuid), api_abrir_conversacion(uuid, uuid), api_enviar_mensaje(uuid, text, text),
   api_leer_conversacion(uuid), api_leer_notificaciones(), api_direccion_guardar(uuid, text, text, text, text),
   api_direccion_eliminar(uuid), api_pago_guardar(text, text), api_pago_predeterminado(uuid), api_pago_eliminar(uuid),
